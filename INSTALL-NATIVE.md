@@ -11,6 +11,17 @@ sudo bash install-native.sh
 
 Скрипт спросит домен, e-mail и пароль PostgreSQL. Предусловия: DNS домена уже указывает на сервер, открыты порты 80/443.
 
+## Вариант с PostgreSQL по умолчанию
+
+Если нужно, чтобы приложение сразу работало на **PostgreSQL** (а не на SQLite):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mnazarow/warehouse-queue/main/deploy/install-native-pg.sh -o install-native-pg.sh
+sudo bash install-native-pg.sh
+```
+
+`deploy/install-native-pg.sh` запускает обычную нативную установку, затем локально логинится, выполняет миграцию схемы и данных в PostgreSQL и переключает активный бэкенд на PG (перезапустив сервис). После этого `db_type=postgresql` сохраняется, и приложение всегда стартует на PostgreSQL.
+
 ## Что делает `deploy/install-native.sh`
 
 1. Ставит системные пакеты: Node.js 20, build-essential/python3 (для сборки `better-sqlite3`), PostgreSQL, Redis, nginx, certbot.
