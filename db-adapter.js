@@ -96,7 +96,7 @@ function translateSql(sql, params) {
   }
   if (namedObj && /[@:$]\w+/.test(result)) {
     result = replaceNamedParams(result, namedObj);
-    return appendConflict(result, conflictClause);
+    return quoteMixedCaseIdents(appendConflict(result, conflictClause));
   }
 
   // Positional ? parameters, ignoring those inside single-quoted strings.
@@ -117,7 +117,7 @@ function translateSql(sql, params) {
   parts.push(result.slice(last));
   result = parts.join('');
 
-  return appendConflict(result, conflictClause);
+  return quoteMixedCaseIdents(appendConflict(result, conflictClause));
 }
 
 // Replace @name / :name / $name placeholders outside single-quoted strings.
@@ -146,6 +146,36 @@ function appendConflict(sql, clause) {
   if (!clause) return sql;
   if (/ON\s+CONFLICT/i.test(sql)) return sql;
   return sql.replace(/;?\s*$/, '') + clause;
+}
+
+// PostgreSQL folds unquoted identifiers to lowercase, but the migration creates
+// columns with their original (often camelCase) names, so a bare `accountNumber`
+// resolves to `accountnumber` and fails. Double-quote mixed-case identifiers so
+// they match the created columns. All-lowercase names and ALL-CAPS keywords are
+// left as-is. Skips text inside single-quoted string literals.
+function quoteMixedCaseIdents(sql) {
+  var out = '';
+  var inStr = false;
+  var i = 0;
+  while (i < sql.length) {
+    var ch = sql[i];
+    if (ch === "'") { inStr = !inStr; out += ch; i++; continue; }
+    if (!inStr && /[A-Za-z_]/.test(ch) && sql[i - 1] !== '"') {
+      var j = i + 1;
+      while (j < sql.length && /[A-Za-z0-9_]/.test(sql[j])) j++;
+      var word = sql.slice(i, j);
+      if (/[A-Z]/.test(word) && /[a-z]/.test(word) && sql[j] !== '"') {
+        out += '"' + word + '"';
+      } else {
+        out += word;
+      }
+      i = j;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
 }
 
 function pgLiteral(val) {

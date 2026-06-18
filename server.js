@@ -9,6 +9,15 @@ const { initDatabase, getDb, setDb, ensureSlotsExist, isWeekday, upsertCounterpa
 const redis = require('redis');
 const { execFile } = require('child_process');
 
+// Safety net: a DB/psql error inside an async route becomes a rejected promise
+// that Express 4 does not catch. Log it instead of letting it crash the server.
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', (err && err.message) ? err.message : err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', (err && err.message) ? err.message : err);
+});
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 // Behind a reverse proxy (nginx) trust X-Forwarded-* so req.ip is the real
@@ -474,6 +483,11 @@ app.get('/api/warehouses', (req, res) => {
   res.json({ warehouses: list });
 });
 
+function worksOnWeekends() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'work_on_weekends'").get();
+  return row ? row.value === '1' : false;
+}
+
 app.get('/api/slots', async (req, res) => {
   const { date, type, warehouse_id } = req.query;
   if (!date || !type) {
@@ -482,7 +496,8 @@ app.get('/api/slots', async (req, res) => {
   if (!['small', 'bulk'].includes(type)) {
     return res.status(400).json({ error: 'type must be small or bulk' });
   }
-  if (!isWeekday(date)) {
+  // Weekends are closed unless the "work on weekends" setting is enabled.
+  if (!isWeekday(date) && !worksOnWeekends()) {
     return res.json({ slots: [], weekday: false });
   }
   const whId = warehouse_id || null;
@@ -2161,6 +2176,19 @@ app.post('/api/manager/settings/logging', requireManager, (req, res) => {
   res.json({ success: true });
 });
 
+app.get('/api/manager/settings/work-on-weekends', requireManager, (req, res) => {
+  const setting = db.prepare("SELECT value FROM settings WHERE key = 'work_on_weekends'").get();
+  res.json({ enabled: setting ? setting.value === '1' : false });
+});
+
+app.post('/api/manager/settings/work-on-weekends', requireManager, (req, res) => {
+  const { enabled } = req.body;
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('work_on_weekends', ?)").run(enabled ? '1' : '0');
+  redisFlushSlotsCache();
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', (enabled ? 'Включил' : 'Выключил') + ' работу в выходные дни', 0, getIp(req), getUserAgent(req));
+  res.json({ success: true });
+});
+
 app.get('/api/manager/settings/logos', requireManager, (req, res) => {
   const logosDir = path.join(__dirname, 'public', 'logos');
   const result = { light: null, dark: null, cyberpunk: null };
@@ -2722,6 +2750,13 @@ app.post('/api/manager/migrate/to-pgsql', requireManager, function(req, res) {
     var batches = generatePgInsertsBatched(t);
     for (var b = 0; b < batches.length; b++) {
       sql += batches[b] + ';\n';
+    }
+    // Rows are copied with their original ids, so advance the SERIAL sequence
+    // to MAX(id); otherwise the next INSERT reuses id=1 and violates the PK.
+    var hasId = false;
+    try { hasId = sqliteDb.prepare("PRAGMA table_info('" + t + "')").all().some(function(c){ return c.name === 'id'; }); } catch (e) {}
+    if (hasId) {
+      sql += "SELECT setval(pg_get_serial_sequence('\"" + t + "\"','id'), COALESCE((SELECT MAX(id) FROM \"" + t + "\"),1), EXISTS(SELECT 1 FROM \"" + t + "\"));\n";
     }
 
     psqlExec(config, sql, function(err) {
