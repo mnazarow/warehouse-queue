@@ -100,59 +100,55 @@ docker compose down -v
 
 ---
 
-# Автодеплой из GitHub (CI/CD)
+# Деплой с GitHub + автообновление (CI/CD)
 
-Workflow `.github/workflows/deploy.yml`: при push в ветку `main` GitHub Actions собирает Docker-образ, публикует его в **GHCR** (`ghcr.io`) и по **SSH** обновляет контейнер на сервере (`git pull` конфигов → `docker compose pull app` → `up -d`). Образы БД/Redis/nginx при этом не трогаются — обновляется только `app`.
-
-## Что нужно один раз настроить
-
-### 1. Сервер (разовая ручная инициализация)
-
-Сервер должен быть готов как при обычном деплое (см. выше), но клонированный из GitHub, и `app` должен запускаться из образа GHCR:
-
-```bash
-git clone https://github.com/ВАШ_ЛОГИН/warehouse-queue.git
-cd warehouse-queue
-cp .env.example .env && nano .env       # заполнить + добавить строку:
-#   APP_IMAGE=ghcr.io/ваш_логин/warehouse-queue:latest   (всё в нижнем регистре)
-docker compose build                    # или сразу pull, если образ уже в GHCR
-./deploy/init-letsencrypt.sh            # выпуск TLS (разово)
-docker compose up -d
-```
-
-### 2. Секреты репозитория GitHub
-
-**Settings → Secrets and variables → Actions → New repository secret:**
-
-| Секрет | Значение |
-|--------|----------|
-| `SSH_HOST` | IP/домен сервера |
-| `SSH_USER` | пользователь SSH |
-| `SSH_KEY` | приватный SSH-ключ (весь, с заголовками `-----BEGIN ...`) |
-| `SSH_PORT` | порт SSH, если не 22 (иначе можно не задавать) |
-| `DEPLOY_PATH` | путь к папке проекта на сервере (где `docker-compose.yml`) |
-| `GHCR_PAT` | GitHub Personal Access Token с правом `read:packages` — чтобы сервер скачивал приватный образ |
-
-`GITHUB_TOKEN` для публикации образа создаётся автоматически — отдельно настраивать не нужно.
-
-### 3. Доступ к образу
-
-По умолчанию пакет в GHCR **приватный** — поэтому на сервере нужен `GHCR_PAT` для `docker login` (workflow делает это сам). Если сделать пакет публичным (GitHub → Packages → пакет → Package settings → Change visibility → Public), `GHCR_PAT` можно не задавать, но тогда уберите строку `docker login` из workflow.
-
-## Как это работает после настройки
+Схема без SSH из CI:
 
 ```
 git push origin main
-   └─► GitHub Actions:
-        1) build образа из Dockerfile
-        2) push в ghcr.io/ваш_логин/warehouse-queue:latest и :<sha>
-        3) SSH на сервер: git reset --hard origin/main → docker compose pull app → up -d
+   └─► GitHub Actions (.github/workflows/deploy.yml):
+         build образа → push в ghcr.io/ваш_логин/warehouse-queue:latest и :<sha>
+
+на сервере:
+   Watchtower каждые 5 мин проверяет GHCR → при новом образе сам
+   пере-создаёт контейнер app (БД/Redis/nginx не трогаются)
 ```
 
-Запустить деплой вручную можно кнопкой **Run workflow** на вкладке Actions (триггер `workflow_dispatch`).
+CI только **публикует образ** в GHCR (использует автоматический `GITHUB_TOKEN`, отдельные секреты не нужны). Развёртывание на сервере делает **Watchtower** — контейнер из `docker-compose.yml`, который следит за образом `app` и обновляет только его.
+
+## Развёртывание на чистом сервере — одной командой
+
+На сервере должны быть установлены Docker + `docker compose`, открыты порты 80/443, и DNS домена уже указывать на сервер.
+
+Скопируйте на сервер один файл и запустите — он склонирует остальное с GitHub, создаст `.env`, выпустит TLS и поднимет весь стек:
+
+```bash
+scp deploy/bootstrap.sh user@server:/tmp/
+ssh user@server 'bash /tmp/bootstrap.sh'
+```
+
+Скрипт спросит: репозиторий (`owner/name`), GitHub-токен (`repo` + `read:packages` — для клона приватного репозитория и скачивания образа), путь установки, домен, e-mail, пароль PostgreSQL. Остальное (`SESSION_SECRET`, `APP_IMAGE`, логин в GHCR) настроит сам.
+
+После этого деплой полностью автоматический: `git push` → CI собирает образ → Watchtower подхватывает его на сервере.
+
+## Доступ к образу (GHCR)
+
+По умолчанию пакет в GHCR **приватный**, поэтому сервер логинится в `ghcr.io` (это делает `bootstrap.sh`), а Watchtower читает креды из `~/.docker/config.json` (примонтирован в контейнер). Токену достаточно прав `read:packages`. Если сделать пакет публичным (GitHub → Packages → Package settings → Change visibility → Public) — логин и токен не нужны.
+
+## Откат к предыдущей версии
+
+Образы тегируются и по SHA коммита. На сервере:
+
+```bash
+cd /opt/warehouse-queue
+# зафиксировать конкретную версию (иначе Watchtower вернёт :latest)
+sed -i 's#^APP_IMAGE=.*#APP_IMAGE=ghcr.io/ваш_логин/warehouse-queue:<sha>#' .env
+docker compose up -d app
+```
 
 ## Заметки
 
-- Деплой обновляет и конфиги (`docker-compose.yml`, nginx-шаблон) через `git reset --hard origin/main`; ваш `.env` не затрагивается (он в `.gitignore`).
-- Образ собирается под `linux/amd64`. Если сервер ARM — добавьте в шаг сборки `platforms: linux/arm64`.
-- Откат: на сервере `APP_IMAGE=ghcr.io/...:<нужный_sha>` и `docker compose up -d app` (образы тегируются и по SHA коммита).
+- Образ собирается под `linux/amd64`. Если сервер ARM — добавьте в шаг сборки workflow `platforms: linux/arm64` (через `docker/build-push-action`).
+- Watchtower обновляет **только** `app` (по метке `com.centurylinklabs.watchtower.enable=true`); образы БД/Redis/nginx закреплены и не трогаются.
+- Изменения в `docker-compose.yml`/nginx-шаблоне Watchtower НЕ применяет (он работает на уровне образа `app`). Для них на сервере: `git pull && docker compose up -d`.
+- Интервал проверки Watchtower меняется через `WATCHTOWER_POLL_INTERVAL` (секунды) в `docker-compose.yml`.

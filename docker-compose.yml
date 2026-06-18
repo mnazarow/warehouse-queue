@@ -6,6 +6,9 @@ services:
     # `docker compose pull app` the CI-built image instead of building.
     image: ${APP_IMAGE:-warehouse-queue:latest}
     restart: unless-stopped
+    # Watchtower auto-updates only containers carrying this label.
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     env_file: .env
     environment:
       PORT: "3000"
@@ -81,6 +84,22 @@ services:
       - certbot_www:/var/www/certbot
     # Renew twice a day; nginx picks up new certs on its own reload schedule.
     entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+
+  # Watches GHCR for a new app image and recreates the app container automatically.
+  # Only the app is watched (label-gated); DB/Redis/nginx are left untouched.
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"   # only update labelled containers (app)
+      WATCHTOWER_CLEANUP: "true"        # remove old images after update
+      WATCHTOWER_POLL_INTERVAL: "300"   # check every 5 minutes
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # GHCR credentials so Watchtower can pull the private image.
+      # Created by `docker login ghcr.io` (the bootstrap script does this).
+      - ${DOCKER_CONFIG_JSON:-/root/.docker/config.json}:/config.json:ro
+    networks: [web]
 
 volumes:
   app_data:

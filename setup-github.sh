@@ -57,47 +57,30 @@ fi
 echo "==> Pushed to https://github.com/$OWNER/$REPO_NAME"
 
 # ---------------------------------------------------------------------------
-# Auto-deploy configuration (GitHub Actions secrets + optional server bootstrap)
+# Optional server bootstrap over SSH (clone + start the full stack).
+# After this, updates are deployed on the server by Watchtower automatically —
+# no GitHub Actions SSH secrets are needed (CI only publishes the image).
 # ---------------------------------------------------------------------------
 echo
-read -r -p "Configure auto-deploy now? (needs your server SSH access) [y/N] " ans
+read -r -p "Bootstrap the server now over SSH (clone, .env, TLS, start)? [y/N] " ans
 if [[ ! "${ans:-N}" =~ ^[Yy]$ ]]; then
-  echo "==> Skipped. Configure later: secrets in Settings > Secrets > Actions,"
-  echo "    server per DOCKER.md > Автодеплой из GitHub."
+  echo "==> Skipped. Deploy on the server later with deploy/bootstrap.sh (see DOCKER.md)."
   echo
   echo "Done. Repo: https://github.com/$OWNER/$REPO_NAME"
+  echo "Push to main builds the image; Watchtower on the server ships it."
   exit 0
 fi
 
 echo "-- Server connection --"
-read -r -p "  Server host/IP (SSH_HOST): " SSH_HOST
-read -r -p "  SSH user (SSH_USER): " SSH_USER
+read -r -p "  Server host/IP: " SSH_HOST
+read -r -p "  SSH user: " SSH_USER
 read -r -p "  SSH port [22]: " SSH_PORT; SSH_PORT="${SSH_PORT:-22}"
-read -r -p "  Project path on server (DEPLOY_PATH) [/opt/warehouse-queue]: " DEPLOY_PATH
+read -r -p "  Install path on server [/opt/warehouse-queue]: " DEPLOY_PATH
 DEPLOY_PATH="${DEPLOY_PATH:-/opt/warehouse-queue}"
-read -r -p "  Path to the SSH key you use to log in to the server [~/.ssh/id_ed25519]: " SSH_KEY_PATH
+read -r -p "  SSH key to log in to the server [~/.ssh/id_ed25519]: " SSH_KEY_PATH
 SSH_KEY_PATH="${SSH_KEY_PATH:-~/.ssh/id_ed25519}"; SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
-read -r -s -p "  GHCR token with read:packages (GHCR_PAT): " GHCR_PAT; echo
-
+read -r -s -p "  GitHub token (read:packages; for image pull): " GHCR_PAT; echo
 [ -f "$SSH_KEY_PATH" ] || { echo "ERROR: SSH key not found: $SSH_KEY_PATH"; exit 1; }
-
-echo "==> Setting GitHub Actions secrets"
-gh secret set SSH_HOST    -b "$SSH_HOST"
-gh secret set SSH_USER    -b "$SSH_USER"
-gh secret set SSH_PORT    -b "$SSH_PORT"
-gh secret set DEPLOY_PATH -b "$DEPLOY_PATH"
-gh secret set GHCR_PAT    -b "$GHCR_PAT"
-gh secret set SSH_KEY     < "$SSH_KEY_PATH"
-echo "    Secrets set."
-
-echo
-read -r -p "Bootstrap the server now over SSH (clone, .env, TLS, start)? [y/N] " bootstrap
-if [[ ! "${bootstrap:-N}" =~ ^[Yy]$ ]]; then
-  echo "==> Secrets done. Prepare the server later per DOCKER.md, then push to deploy."
-  echo
-  echo "Done. Repo: https://github.com/$OWNER/$REPO_NAME"
-  exit 0
-fi
 
 echo "-- App configuration (written to the server's .env) --"
 read -r -p "  Domain (DNS A/AAAA must already point to the server): " DOMAIN
@@ -111,10 +94,6 @@ SSH="ssh -p $SSH_PORT -o StrictHostKeyChecking=accept-new -i $SSH_KEY_PATH $SSH_
 echo "==> [server] Checking Docker"
 $SSH 'command -v docker >/dev/null && docker compose version >/dev/null' \
   || { echo "ERROR: Docker / 'docker compose' not available on the server. Install Docker first."; exit 1; }
-
-echo "==> [server] Authorizing the GitHub Actions key for SSH"
-ACTIONS_PUBKEY="$(ssh-keygen -y -f "$SSH_KEY_PATH")"
-$SSH "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF '$ACTIONS_PUBKEY' ~/.ssh/authorized_keys || echo '$ACTIONS_PUBKEY' >> ~/.ssh/authorized_keys"
 
 echo "==> [server] Creating a read-only deploy key for cloning the repo"
 $SSH "test -f ~/.ssh/wh_deploy || ssh-keygen -t ed25519 -N '' -f ~/.ssh/wh_deploy -C wh-deploy >/dev/null"
@@ -136,6 +115,7 @@ $SSH "if [ -d '$DEPLOY_PATH/.git' ]; then \
 # Make future git operations (incl. the CI deploy) use the deploy key.
 $SSH "cd '$DEPLOY_PATH' && git config core.sshCommand 'ssh -i ~/.ssh/wh_deploy -o StrictHostKeyChecking=accept-new'"
 
+SRV_HOME="$($SSH 'echo $HOME')"
 echo "==> [server] Writing .env"
 $SSH "cat > '$DEPLOY_PATH/.env'" <<EOF
 DOMAIN=$DOMAIN
@@ -145,9 +125,10 @@ POSTGRES_DB=warehouse
 POSTGRES_USER=warehouse
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 APP_IMAGE=$IMAGE_LC
+DOCKER_CONFIG_JSON=$SRV_HOME/.docker/config.json
 EOF
 
-echo "==> [server] Logging in to GHCR (for future image pulls)"
+echo "==> [server] Logging in to GHCR (image pulls + Watchtower)"
 $SSH "echo '$GHCR_PAT' | docker login ghcr.io -u '$OWNER' --password-stdin"
 
 echo "==> [server] Building the initial image locally (CI image may not be ready yet)"
