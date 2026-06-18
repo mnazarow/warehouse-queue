@@ -39,11 +39,21 @@ fi
 git commit -q -m "warehouse-queue: initial commit"
 git branch -M main
 
-echo "==> Creating GitHub repo and pushing ($VISIBILITY)"
-# Creates the repo under your account, adds it as 'origin', and pushes.
-gh repo create "$REPO_NAME" "--$VISIBILITY" --source=. --remote=origin --push
-
 OWNER="$(gh api user --jq .login)"
+if gh repo view "$OWNER/$REPO_NAME" >/dev/null 2>&1; then
+  echo "==> Repo $OWNER/$REPO_NAME already exists — pushing to it"
+  git remote remove origin >/dev/null 2>&1 || true
+  git remote add origin "https://github.com/$OWNER/$REPO_NAME.git"
+  if ! git push -u origin main; then
+    echo "ERROR: push was rejected (the remote repo already has commits). Choose one:"
+    echo "   git pull --rebase origin main && git push -u origin main   # keep remote history"
+    echo "   git push --force-with-lease origin main                    # overwrite remote with local"
+    exit 1
+  fi
+else
+  echo "==> Creating GitHub repo and pushing ($VISIBILITY)"
+  gh repo create "$REPO_NAME" "--$VISIBILITY" --source=. --remote=origin --push
+fi
 echo "==> Pushed to https://github.com/$OWNER/$REPO_NAME"
 
 # ---------------------------------------------------------------------------
