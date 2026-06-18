@@ -711,6 +711,11 @@
         <div>Память: <b id="aboutMemory">—</b></div>
         <div>Запросов к БД за час: <b id="aboutDbReq">—</b></div>
         <div>Запросов к Redis за час: <b id="aboutRedisReq">—</b></div>
+        <div style="margin-top:10px">
+          <button class="btn btn-secondary" onclick="checkUpdate()">Проверить обновления</button>
+          <button class="btn btn-primary" onclick="updateNow()">Обновить</button>
+          <span id="updateResult" style="margin-left:8px"></span>
+        </div>
       </div>
 
       <div class="section-header">
@@ -2149,6 +2154,40 @@
           } catch {}
         }, 10000);
       } catch {}
+    }
+
+    async function checkUpdate() {
+      const el = document.getElementById('updateResult');
+      el.style.color = '#718096'; el.textContent = 'Проверка...';
+      try {
+        const res = await fetch('/api/manager/check-update', { credentials: 'include' });
+        const d = await res.json();
+        if (!d.ok) { el.style.color = '#e53e3e'; el.textContent = 'Проверка недоступна: ' + (d.error || 'нет git-репозитория'); return; }
+        const cur = (d.current || '').slice(0, 7);
+        const lat = (d.latest || '').slice(0, 7);
+        if (d.upToDate) { el.style.color = '#38a169'; el.textContent = 'Установлена последняя версия (' + cur + ')'; }
+        else if (d.updateAvailable) { el.style.color = '#d69e2e'; el.textContent = 'Доступно обновление: ' + cur + ' → ' + lat; }
+        else { el.style.color = '#718096'; el.textContent = 'Не удалось определить версию (' + cur + ')'; }
+      } catch (e) { el.style.color = '#e53e3e'; el.textContent = 'Ошибка: ' + e.message; }
+    }
+
+    async function updateNow() {
+      if (!confirm('Обновить приложение до последней версии? Приложение будет перезапущено.')) return;
+      const el = document.getElementById('updateResult');
+      el.style.color = '#718096'; el.textContent = 'Обновление... (это может занять минуту)';
+      try {
+        const res = await fetch('/api/manager/update', { method: 'POST', credentials: 'include' });
+        const d = await res.json();
+        if (!d.success) { el.style.color = '#e53e3e'; el.textContent = 'Ошибка: ' + (d.error || 'не удалось'); return; }
+        if (!d.updated) { el.style.color = '#38a169'; el.textContent = 'Уже установлена последняя версия'; return; }
+        el.style.color = '#38a169';
+        el.textContent = 'Обновлено ' + (d.from || '').slice(0, 7) + ' → ' + (d.to || '').slice(0, 7) + '. Перезапуск...';
+        setTimeout(() => location.reload(), 9000);
+      } catch (e) {
+        // Connection likely dropped because the app is restarting — wait and reload.
+        el.style.color = '#38a169'; el.textContent = 'Приложение перезапускается...';
+        setTimeout(() => location.reload(), 9000);
+      }
     }
 
     async function downloadBackup() {

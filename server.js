@@ -2286,6 +2286,81 @@ app.get('/api/manager/about', requireManager, (req, res) => {
   });
 });
 
+// Compare the local checkout with the configured git remote (origin). Works for
+// any host (GitHub, GitLab, …) since it uses the repo's own remote.
+function gitCmd(args) {
+  return new Promise(function(resolve, reject) {
+    execFile('git', ['-C', __dirname].concat(args), { timeout: 15000 }, function(err, stdout, stderr) {
+      if (err) return reject(new Error(((stderr || err.message) || '').trim()));
+      resolve((stdout || '').trim());
+    });
+  });
+}
+
+app.get('/api/manager/check-update', requireManager, async (req, res) => {
+  try {
+    const current = await gitCmd(['rev-parse', 'HEAD']);
+    let branch = 'main';
+    try { branch = await gitCmd(['rev-parse', '--abbrev-ref', 'HEAD']) || 'main'; } catch (e) {}
+    let remoteUrl = '';
+    try { remoteUrl = await gitCmd(['config', '--get', 'remote.origin.url']); } catch (e) {}
+    const ls = await gitCmd(['ls-remote', 'origin', branch]);
+    const latest = ls ? ls.split(/\s+/)[0] : '';
+    res.json({
+      ok: true,
+      branch: branch,
+      remoteUrl: remoteUrl,
+      current: current,
+      latest: latest,
+      upToDate: !!latest && current === latest,
+      updateAvailable: !!latest && current !== latest
+    });
+  } catch (e) {
+    res.json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+function npmInstall() {
+  return new Promise(function(resolve, reject) {
+    execFile(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--omit=dev'], { cwd: __dirname, timeout: 300000 }, function(err, so, se) {
+      if (err) return reject(new Error(((se || err.message) || '').trim()));
+      resolve();
+    });
+  });
+}
+
+// Pull the latest code from the git remote and restart so it takes effect.
+// Relies on a process supervisor (systemd / Docker restart policy) to bring the
+// app back up. Suitable for the native / git-checkout deployments.
+app.post('/api/manager/update', requireManager, async (req, res) => {
+  try {
+    const before = await gitCmd(['rev-parse', 'HEAD']);
+    let branch = 'main';
+    try { branch = await gitCmd(['rev-parse', '--abbrev-ref', 'HEAD']) || 'main'; } catch (e) {}
+    await gitCmd(['pull', '--ff-only', 'origin', branch]);
+    const after = await gitCmd(['rev-parse', 'HEAD']);
+    if (before === after) {
+      return res.json({ success: true, updated: false, message: 'Уже установлена последняя версия' });
+    }
+    let depsChanged = false;
+    try {
+      const diff = await gitCmd(['diff', '--name-only', before, after]);
+      depsChanged = /(^|\n)package(-lock)?\.json/.test(diff);
+    } catch (e) {}
+    if (depsChanged) {
+      try { await npmInstall(); } catch (e) {
+        return res.json({ success: false, error: 'git обновлён, но npm ci не прошёл: ' + e.message });
+      }
+    }
+    logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Обновление', 'Обновил приложение ' + before.slice(0, 7) + ' → ' + after.slice(0, 7), 0, getIp(req), getUserAgent(req));
+    res.json({ success: true, updated: true, from: before, to: after, depsChanged: depsChanged, restarting: true });
+    // Give the response time to flush, then exit so the supervisor restarts us.
+    setTimeout(function() { process.exit(0); }, 800);
+  } catch (e) {
+    res.json({ success: false, error: String(e.message || e) });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Backup / restore (logical JSON dump, backend-agnostic via the active adapter)
 // ---------------------------------------------------------------------------
