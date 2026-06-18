@@ -6,6 +6,7 @@ warehouse.db
 warehouse.db-wal
 warehouse.db-shm
 data
+backups
 # VCS / editor / docs
 .git
 .gitignore

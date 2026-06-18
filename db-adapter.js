@@ -8,6 +8,24 @@ var currentType = 'sqlite';
 // statements here so they can be flushed atomically as a single BEGIN/COMMIT.
 var txBuffer = null;
 
+// Rolling per-minute counter of DB queries (60 one-minute buckets = last hour).
+var dbHits = new Array(60).fill(0);
+var dbStamp = new Array(60).fill(-1);
+function countDbCall() {
+  var minute = Math.floor(Date.now() / 60000);
+  var idx = minute % 60;
+  if (dbStamp[idx] !== minute) { dbStamp[idx] = minute; dbHits[idx] = 0; }
+  dbHits[idx]++;
+}
+function dbRequestsLastHour() {
+  var minute = Math.floor(Date.now() / 60000);
+  var sum = 0;
+  for (var i = 0; i < 60; i++) {
+    if (dbStamp[i] >= 0 && (minute - dbStamp[i]) < 60) sum += dbHits[i];
+  }
+  return sum;
+}
+
 function setSqlite(db) {
   sqliteDb = db;
   currentType = 'sqlite';
@@ -208,6 +226,7 @@ function flushTxBuffer() {
 function prepare(sql) {
   return {
     get: function() {
+      countDbCall();
       if (currentType === 'postgresql') {
         return pgQueryGet(sql, Array.prototype.slice.call(arguments));
       }
@@ -215,6 +234,7 @@ function prepare(sql) {
       return s.get.apply(s, arguments);
     },
     all: function() {
+      countDbCall();
       if (currentType === 'postgresql') {
         return pgQueryAll(sql, Array.prototype.slice.call(arguments));
       }
@@ -222,6 +242,7 @@ function prepare(sql) {
       return s.all.apply(s, arguments);
     },
     run: function() {
+      countDbCall();
       if (currentType === 'postgresql') {
         return pgQueryRun(sql, Array.prototype.slice.call(arguments));
       }
@@ -322,4 +343,4 @@ function pgQueryRun(sql, params) {
   return { changes: parseChanges(out), lastInsertRowid: undefined };
 }
 
-module.exports = { setSqlite, setPg, getType, prepare, exec, transaction, runReturningId };
+module.exports = { setSqlite, setPg, getType, prepare, exec, transaction, runReturningId, dbRequestsLastHour };

@@ -704,7 +704,54 @@
       <div style="max-width:600px;margin-bottom:18px;padding:10px 14px;background:rgba(0,0,0,0.04);border-radius:8px;font-size:0.85rem;color:#4a5568">
         <div>Версия программы: <b id="aboutVersion">—</b></div>
         <div>Последнее изменение: <b id="aboutModified">—</b></div>
+        <div>Время сервера: <b id="aboutServerTime">—</b></div>
+        <div>Запущено: <b id="aboutStarted">—</b></div>
+        <div>Время работы (с момента запуска): <b id="aboutUptime">—</b></div>
+        <div>Нагрузка сервера: <b id="aboutLoad">—</b></div>
+        <div>Память: <b id="aboutMemory">—</b></div>
+        <div>Запросов к БД за час: <b id="aboutDbReq">—</b></div>
+        <div>Запросов к Redis за час: <b id="aboutRedisReq">—</b></div>
       </div>
+
+      <div class="section-header">
+        <h2>Резервное копирование БД</h2>
+      </div>
+      <div style="max-width:600px;margin-bottom:18px">
+        <p style="font-size:0.85rem;color:#718096;margin:0 0 12px">Скачайте полную копию данных в файл (JSON) или восстановите БД из ранее сохранённого файла. Восстановление <b>полностью заменяет</b> текущие данные.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-primary" onclick="downloadBackup()">Скачать резервную копию</button>
+          <input type="file" id="restoreFile" accept=".json,application/json" style="font-size:0.85rem">
+          <button class="btn btn-secondary" onclick="restoreBackup()">Восстановить из файла</button>
+        </div>
+        <div id="backupMessage" style="margin-top:10px;display:none;font-size:0.85rem"></div>
+
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid rgba(0,0,0,0.08)">
+          <div style="font-weight:600;margin-bottom:10px;font-size:0.95rem">Автоматическое резервное копирование</div>
+          <div class="form-group">
+            <label>Интервал</label>
+            <select id="autobackupInterval" style="width:100%">
+              <option value="0">Выключено</option>
+              <option value="3600">Раз в час</option>
+              <option value="7200">Раз в два часа</option>
+              <option value="14400">Раз в четыре часа</option>
+              <option value="86400">Раз в сутки</option>
+              <option value="604800">Раз в неделю</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Сколько копий хранить</label>
+            <input type="number" id="autobackupKeep" min="1" max="1000" value="24" style="width:100%">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button class="btn btn-primary" onclick="saveAutobackup()">Сохранить расписание</button>
+            <button class="btn btn-secondary" onclick="runBackupNow()">Создать копию сейчас</button>
+          </div>
+          <div id="autobackupMessage" style="margin-top:10px;display:none;font-size:0.85rem"></div>
+          <div style="margin-top:14px;font-weight:600;font-size:0.9rem">Сохранённые копии</div>
+          <div id="backupsList" style="margin-top:8px;font-size:0.85rem">—</div>
+        </div>
+      </div>
+
       <div style="max-width:600px">
         <div class="form-group" style="margin-bottom:16px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
@@ -2039,9 +2086,35 @@
       if (name === 'bannedphones') loadBannedPhones();
       if (name === 'bannedips') loadBannedIps();
       if (name === 'vehicleclasses') { loadVehicleClasses(); loadLoadTypes(); }
-      if (name === 'settings') { loadAbout(); loadSettings(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
+      if (name === 'settings') { loadAbout(); loadSettings(); loadAutobackup(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
     }
 
+    let aboutTimer = null;
+    let aboutMetricsTimer = null;
+    function renderAboutMetrics(data) {
+      if (data.load) {
+        document.getElementById('aboutLoad').textContent =
+          data.load.percent + '% (loadavg ' + data.load.avg1.toFixed(2) + ' / ' +
+          data.load.avg5.toFixed(2) + ' / ' + data.load.avg15.toFixed(2) + ', ' + data.load.cpus + ' CPU)';
+      }
+      if (data.memory) {
+        document.getElementById('aboutMemory').textContent =
+          data.memory.usedMb + ' / ' + data.memory.totalMb + ' МБ (процесс ' + data.memory.rssMb + ' МБ)';
+      }
+      if (typeof data.dbRequestsLastHour === 'number')
+        document.getElementById('aboutDbReq').textContent = data.dbRequestsLastHour.toLocaleString('ru-RU');
+      if (typeof data.redisRequestsLastHour === 'number')
+        document.getElementById('aboutRedisReq').textContent = data.redisRequestsLastHour.toLocaleString('ru-RU');
+    }
+    function formatUptime(sec) {
+      sec = Math.max(0, Math.floor(sec));
+      const d = Math.floor(sec / 86400);
+      const h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      const pad = n => String(n).padStart(2, '0');
+      return (d > 0 ? d + ' д ' : '') + pad(h) + ':' + pad(m) + ':' + pad(s);
+    }
     async function loadAbout() {
       try {
         const res = await fetch('/api/manager/about', { credentials: 'include' });
@@ -2051,7 +2124,159 @@
         document.getElementById('aboutModified').textContent = data.lastModified
           ? new Date(data.lastModified).toLocaleString('ru-RU')
           : '—';
+        document.getElementById('aboutStarted').textContent = data.startedAt
+          ? new Date(data.startedAt).toLocaleString('ru-RU')
+          : '—';
+        renderAboutMetrics(data);
+        // Live server clock + uptime, ticked locally from the fetched baseline.
+        if (aboutTimer) { clearInterval(aboutTimer); aboutTimer = null; }
+        const baseServer = data.serverTime ? new Date(data.serverTime).getTime() : Date.now();
+        const baseUptime = typeof data.uptimeSeconds === 'number' ? data.uptimeSeconds : 0;
+        const fetchedAt = Date.now();
+        const tick = () => {
+          const elapsed = Date.now() - fetchedAt;
+          document.getElementById('aboutServerTime').textContent = new Date(baseServer + elapsed).toLocaleString('ru-RU');
+          document.getElementById('aboutUptime').textContent = formatUptime(baseUptime + elapsed / 1000);
+        };
+        tick();
+        aboutTimer = setInterval(tick, 1000);
+        // Refresh load / request counters periodically.
+        if (aboutMetricsTimer) { clearInterval(aboutMetricsTimer); aboutMetricsTimer = null; }
+        aboutMetricsTimer = setInterval(async () => {
+          try {
+            const r = await fetch('/api/manager/about', { credentials: 'include' });
+            if (r.ok) renderAboutMetrics(await r.json());
+          } catch {}
+        }, 10000);
       } catch {}
+    }
+
+    async function downloadBackup() {
+      const msg = document.getElementById('backupMessage');
+      try {
+        const res = await fetch('/api/manager/backup', { credentials: 'include' });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || ('HTTP ' + res.status)); }
+        const blob = await res.blob();
+        const cd = res.headers.get('Content-Disposition') || '';
+        const m = cd.match(/filename="([^"]+)"/);
+        const name = m ? m[1] : 'warehouse-backup.json';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        msg.style.color = '#38a169'; msg.textContent = 'Резервная копия скачана'; msg.style.display = 'block';
+        setTimeout(() => { msg.style.display = 'none'; }, 4000);
+      } catch (e) {
+        msg.style.color = '#e53e3e'; msg.textContent = 'Ошибка: ' + e.message; msg.style.display = 'block';
+      }
+    }
+
+    async function restoreBackup() {
+      const msg = document.getElementById('backupMessage');
+      const fileEl = document.getElementById('restoreFile');
+      const file = fileEl.files && fileEl.files[0];
+      if (!file) { alert('Сначала выберите файл резервной копии'); return; }
+      if (!confirm('Восстановление ПОЛНОСТЬЮ заменит текущие данные БД на содержимое файла. Продолжить?')) return;
+      try {
+        const text = await file.text();
+        let dump;
+        try { dump = JSON.parse(text); } catch { alert('Файл не является корректным JSON'); return; }
+        msg.style.color = '#718096'; msg.textContent = 'Восстановление...'; msg.style.display = 'block';
+        const res = await fetch('/api/manager/restore', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', body: JSON.stringify(dump)
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || ('HTTP ' + res.status));
+        msg.style.color = '#38a169';
+        msg.textContent = 'БД восстановлена (' + (data.rows || 0) + ' записей). Перезагрузка...';
+        setTimeout(() => location.reload(), 1500);
+      } catch (e) {
+        msg.style.color = '#e53e3e'; msg.textContent = 'Ошибка: ' + e.message; msg.style.display = 'block';
+      }
+    }
+
+    async function loadAutobackup() {
+      try {
+        const res = await fetch('/api/manager/settings/autobackup', { credentials: 'include' });
+        if (res.ok) {
+          const d = await res.json();
+          document.getElementById('autobackupInterval').value = String(d.interval || 0);
+          document.getElementById('autobackupKeep').value = d.keep || 24;
+        }
+      } catch {}
+      loadBackupsList();
+    }
+
+    async function loadBackupsList() {
+      const box = document.getElementById('backupsList');
+      try {
+        const res = await fetch('/api/manager/backups', { credentials: 'include' });
+        if (!res.ok) { box.textContent = '—'; return; }
+        const d = await res.json();
+        const items = d.backups || [];
+        if (!items.length) { box.textContent = 'Пока нет автоматических копий'; return; }
+        box.innerHTML = items.map(b =>
+          '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(0,0,0,0.06)">'
+          + '<span>' + escapeHtml(new Date(b.createdAt).toLocaleString('ru-RU')) + ' <span style="color:#a0aec0">(' + escapeHtml(b.sizeKb) + ' КБ)</span></span>'
+          + '<span style="white-space:nowrap">'
+          + '<a href="#" onclick="downloadStoredBackup(\'' + jsStr(b.name) + '\');return false">Скачать</a> · '
+          + '<a href="#" style="color:#e53e3e" onclick="restoreStoredBackup(\'' + jsStr(b.name) + '\');return false">Восстановить</a>'
+          + '</span></div>'
+        ).join('');
+      } catch { box.textContent = '—'; }
+    }
+
+    async function saveAutobackup() {
+      const msg = document.getElementById('autobackupMessage');
+      const interval = parseInt(document.getElementById('autobackupInterval').value, 10);
+      const keep = parseInt(document.getElementById('autobackupKeep').value, 10);
+      try {
+        const res = await fetch('/api/manager/settings/autobackup', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', body: JSON.stringify({ interval, keep })
+        });
+        const d = await res.json();
+        if (!res.ok || !d.success) throw new Error(d.error || 'Ошибка');
+        msg.style.color = '#38a169'; msg.textContent = 'Расписание сохранено'; msg.style.display = 'block';
+        setTimeout(() => { msg.style.display = 'none'; }, 3000);
+        loadBackupsList();
+      } catch (e) { msg.style.color = '#e53e3e'; msg.textContent = 'Ошибка: ' + e.message; msg.style.display = 'block'; }
+    }
+
+    async function runBackupNow() {
+      const msg = document.getElementById('autobackupMessage');
+      try {
+        const res = await fetch('/api/manager/backups/run', { method: 'POST', credentials: 'include' });
+        const d = await res.json();
+        if (!res.ok || !d.success) throw new Error(d.error || 'Ошибка');
+        msg.style.color = '#38a169'; msg.textContent = 'Копия создана: ' + d.name; msg.style.display = 'block';
+        setTimeout(() => { msg.style.display = 'none'; }, 3000);
+        loadBackupsList();
+      } catch (e) { msg.style.color = '#e53e3e'; msg.textContent = 'Ошибка: ' + e.message; msg.style.display = 'block'; }
+    }
+
+    async function downloadStoredBackup(name) {
+      try {
+        const res = await fetch('/api/manager/backups/' + encodeURIComponent(name), { credentials: 'include' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    }
+
+    async function restoreStoredBackup(name) {
+      if (!confirm('Восстановить БД из копии «' + name + '»? Текущие данные будут полностью заменены.')) return;
+      try {
+        const res = await fetch('/api/manager/backups/' + encodeURIComponent(name) + '/restore', { method: 'POST', credentials: 'include' });
+        const d = await res.json();
+        if (!res.ok || !d.success) throw new Error(d.error || 'Ошибка');
+        alert('БД восстановлена (' + (d.rows || 0) + ' записей). Страница будет перезагружена.');
+        location.reload();
+      } catch (e) { alert('Ошибка: ' + e.message); }
     }
 
     async function loadSettings() {

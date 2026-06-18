@@ -7,6 +7,7 @@ const https = require('https');
 const http = require('http');
 const { initDatabase, getDb, setDb, ensureSlotsExist, isWeekday, upsertCounterparty, upsertNomenclature, upsertOrder1c, saveOrderItems1c, upsertManager1c, upsertEngineer1c } = require('./database');
 const redis = require('redis');
+const os = require('os');
 const { execFile } = require('child_process');
 
 // Safety net: a DB/psql error inside an async route becomes a rejected promise
@@ -35,7 +36,7 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-app.use(express.json());
+app.use(express.json({ limit: '64mb' }));
 app.use('/manager.html', requireAllowedIP);
 app.use('/api/manager', requireAllowedIP);
 app.use(express.static(path.join(__dirname, 'public')));
@@ -131,9 +132,28 @@ function initRedis() {
   }
 }
 
+// Rolling per-minute counter of Redis operations (last hour).
+var redisHits = new Array(60).fill(0);
+var redisStamp = new Array(60).fill(-1);
+function countRedisCall() {
+  var minute = Math.floor(Date.now() / 60000);
+  var idx = minute % 60;
+  if (redisStamp[idx] !== minute) { redisStamp[idx] = minute; redisHits[idx] = 0; }
+  redisHits[idx]++;
+}
+function redisRequestsLastHour() {
+  var minute = Math.floor(Date.now() / 60000);
+  var sum = 0;
+  for (var i = 0; i < 60; i++) {
+    if (redisStamp[i] >= 0 && (minute - redisStamp[i]) < 60) sum += redisHits[i];
+  }
+  return sum;
+}
+
 function redisGet(key) {
   return new Promise(function(resolve) {
     if (!redisClient || !redisEnabled) return resolve(null);
+    countRedisCall();
     redisClient.get(key, function(err, val) {
       resolve(err ? null : val);
     });
@@ -188,6 +208,7 @@ function effectiveTtl(key, fallback) {
 function redisSet(key, value, ttlSeconds) {
   return new Promise(function(resolve) {
     if (!redisClient || !redisEnabled) return resolve();
+    countRedisCall();
     var ttl = effectiveTtl(key, ttlSeconds);
     if (ttl) redisClient.setex(key, ttl, value, function() { resolve(); });
     else redisClient.set(key, value, function() { resolve(); });
@@ -197,6 +218,7 @@ function redisSet(key, value, ttlSeconds) {
 function redisDel(key) {
   return new Promise(function(resolve) {
     if (!redisClient || !redisEnabled) return resolve();
+    countRedisCall();
     redisClient.del(key, function() { resolve(); });
   });
 }
@@ -204,6 +226,7 @@ function redisDel(key) {
 function redisFlushSlotsCache() {
   return new Promise(function(resolve) {
     if (!redisClient || !redisEnabled) return resolve();
+    countRedisCall();
     redisClient.keys('slots:*', function(err, keys) {
       if (err || !keys || !keys.length) return resolve();
       redisClient.del.apply(redisClient, keys.concat([function() { resolve(); }]));
@@ -214,6 +237,7 @@ function redisFlushSlotsCache() {
 function redisFlushByPrefix(prefix) {
   return new Promise(function(resolve) {
     if (!redisClient || !redisEnabled) return resolve();
+    countRedisCall();
     redisClient.keys(prefix + ':*', function(err, keys) {
       if (err || !keys || !keys.length) return resolve();
       redisClient.del.apply(redisClient, keys.concat([function() { resolve(); }]));
@@ -224,6 +248,7 @@ function redisFlushByPrefix(prefix) {
 function redisFlushAll() {
   return new Promise(function(resolve) {
     if (!redisClient || !redisEnabled) return resolve();
+    countRedisCall();
     redisClient.keys('*', function(err, keys) {
       if (err || !keys || !keys.length) return resolve();
       redisClient.del.apply(redisClient, keys.concat([function() { resolve(); }]));
@@ -254,6 +279,7 @@ function getRedisStatus() {
 
 loadTtlOverrides();
 initRedis();
+scheduleAutobackup();
 
 function getIp(req) {
   return req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : req.connection.remoteAddress || '';
@@ -2224,6 +2250,7 @@ app.post('/api/manager/settings/logging', requireManager, (req, res) => {
 });
 
 var APP_VERSION = (function() { try { return require('./package.json').version || '?'; } catch (e) { return '?'; } })();
+var APP_STARTED = new Date().toISOString();
 
 app.get('/api/manager/about', requireManager, (req, res) => {
   var lastModified = null;
@@ -2235,7 +2262,213 @@ app.get('/api/manager/about', requireManager, (req, res) => {
     }
     if (max) lastModified = new Date(max).toISOString();
   } catch (e) {}
-  res.json({ version: APP_VERSION, lastModified: lastModified });
+  var load = (typeof os.loadavg === 'function') ? os.loadavg() : [0, 0, 0];
+  var cpus = (os.cpus() || []).length || 1;
+  res.json({
+    version: APP_VERSION,
+    lastModified: lastModified,
+    serverTime: new Date().toISOString(),
+    startedAt: APP_STARTED,
+    uptimeSeconds: Math.floor(process.uptime()),
+    load: { avg1: load[0], avg5: load[1], avg15: load[2], cpus: cpus, percent: Math.round((load[0] / cpus) * 100) },
+    memory: {
+      rssMb: Math.round(process.memoryUsage().rss / 1048576),
+      usedMb: Math.round((os.totalmem() - os.freemem()) / 1048576),
+      totalMb: Math.round(os.totalmem() / 1048576)
+    },
+    redisRequestsLastHour: redisRequestsLastHour(),
+    dbRequestsLastHour: (typeof dbAdapter.dbRequestsLastHour === 'function') ? dbAdapter.dbRequestsLastHour() : 0
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Backup / restore (logical JSON dump, backend-agnostic via the active adapter)
+// ---------------------------------------------------------------------------
+var BACKUP_DIR = process.env.BACKUP_DIR || path.join(process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : __dirname, 'backups');
+var AUTOBACKUP_INTERVALS = [3600, 7200, 14400, 86400, 604800]; // 1h, 2h, 4h, 1d, 1w
+var autobackupTimer = null;
+
+function buildBackupObject() {
+  const tables = getSqliteTables();
+  const dump = { app: 'warehouse-queue', version: APP_VERSION, createdAt: new Date().toISOString(), dbType: dbAdapter.getType(), tables: {} };
+  for (const t of tables) dump.tables[t] = db.prepare('SELECT * FROM "' + t + '"').all();
+  return dump;
+}
+
+function restoreFromDump(dump) {
+  if (!dump || typeof dump.tables !== 'object' || dump.tables === null) {
+    throw new Error('Некорректный файл резервной копии');
+  }
+  const tables = getSqliteTables();
+  let rowCount = 0;
+  const doRestore = db.transaction(() => {
+    for (const t of tables) {
+      if (!Array.isArray(dump.tables[t])) continue;
+      db.prepare('DELETE FROM "' + t + '"').run();
+      for (const row of dump.tables[t]) {
+        const cols = Object.keys(row);
+        if (!cols.length) continue;
+        const colList = cols.map(c => '"' + c + '"').join(', ');
+        const placeholders = cols.map(() => '?').join(', ');
+        db.prepare('INSERT INTO "' + t + '" (' + colList + ') VALUES (' + placeholders + ')').run.apply(null, cols.map(c => row[c]));
+        rowCount++;
+      }
+    }
+  });
+  doRestore();
+  if (dbAdapter.getType() === 'postgresql') {
+    for (const t of tables) {
+      let hasId = false;
+      try { hasId = sqliteDb.prepare("PRAGMA table_info('" + t + "')").all().some(c => c.name === 'id'); } catch (e) {}
+      if (hasId) {
+        try { db.prepare("SELECT setval(pg_get_serial_sequence('\"" + t + "\"','id'), COALESCE((SELECT MAX(id) FROM \"" + t + "\"),1), EXISTS(SELECT 1 FROM \"" + t + "\"))").get(); } catch (e) {}
+      }
+    }
+  }
+  loadTtlOverrides();
+  redisFlushAll();
+  return rowCount;
+}
+
+function safeBackupName(name) {
+  return (typeof name === 'string' && /^[A-Za-z0-9_.\-]+\.json$/.test(name) && name.indexOf('..') === -1) ? name : null;
+}
+
+function getAutobackupInterval() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'autobackup_interval'").get();
+  const n = row ? parseInt(row.value, 10) : 0;
+  return AUTOBACKUP_INTERVALS.indexOf(n) !== -1 ? n : 0;
+}
+function getAutobackupKeep() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'autobackup_keep'").get();
+  const n = row ? parseInt(row.value, 10) : 0;
+  return (n && n > 0) ? Math.min(n, 1000) : 24;
+}
+
+function pruneBackups() {
+  try {
+    const keep = getAutobackupKeep();
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => /^autobackup-.*\.json$/.test(f))
+      .map(f => ({ f: f, t: fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (let i = keep; i < files.length; i++) {
+      try { fs.unlinkSync(path.join(BACKUP_DIR, files[i].f)); } catch (e) {}
+    }
+  } catch (e) {}
+}
+
+function writeAutoBackup() {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const dump = buildBackupObject();
+  const name = 'autobackup-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.json';
+  fs.writeFileSync(path.join(BACKUP_DIR, name), JSON.stringify(dump));
+  pruneBackups();
+  return name;
+}
+
+function scheduleAutobackup() {
+  if (autobackupTimer) { clearInterval(autobackupTimer); autobackupTimer = null; }
+  const sec = getAutobackupInterval();
+  if (sec > 0) {
+    autobackupTimer = setInterval(function() {
+      try { writeAutoBackup(); } catch (e) { console.error('Autobackup failed:', e.message); }
+    }, sec * 1000);
+  }
+}
+
+app.get('/api/manager/backup', requireManager, (req, res) => {
+  try {
+    const dump = buildBackupObject();
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="warehouse-backup-' + stamp + '.json"');
+    res.send(JSON.stringify(dump));
+    logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Резервная копия', 'Скачал резервную копию БД', 0, getIp(req), getUserAgent(req));
+  } catch (e) {
+    res.status(500).json({ error: 'Ошибка создания резервной копии: ' + (e.message || e) });
+  }
+});
+
+app.post('/api/manager/restore', requireManager, (req, res) => {
+  try {
+    const rows = restoreFromDump(req.body);
+    logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Резервная копия', 'Восстановил БД из файла (' + rows + ' записей)', 0, getIp(req), getUserAgent(req));
+    res.json({ success: true, rows: rows });
+  } catch (e) {
+    res.status(e.message.indexOf('Некорректный') === 0 ? 400 : 500).json({ error: 'Ошибка восстановления: ' + (e.message || e) });
+  }
+});
+
+app.get('/api/manager/settings/autobackup', requireManager, (req, res) => {
+  res.json({ interval: getAutobackupInterval(), keep: getAutobackupKeep(), intervals: AUTOBACKUP_INTERVALS });
+});
+
+app.post('/api/manager/settings/autobackup', requireManager, (req, res) => {
+  let interval = parseInt(req.body.interval, 10);
+  if (isNaN(interval) || (interval !== 0 && AUTOBACKUP_INTERVALS.indexOf(interval) === -1)) {
+    return res.status(400).json({ error: 'Недопустимый интервал' });
+  }
+  let keep = parseInt(req.body.keep, 10);
+  if (isNaN(keep) || keep < 1 || keep > 1000) {
+    return res.status(400).json({ error: 'Кол-во копий должно быть от 1 до 1000' });
+  }
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('autobackup_interval', ?)").run(String(interval));
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('autobackup_keep', ?)").run(String(keep));
+  scheduleAutobackup();
+  pruneBackups();
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', 'Изменил автоматическое резервное копирование', 0, getIp(req), getUserAgent(req));
+  res.json({ success: true });
+});
+
+app.get('/api/manager/backups', requireManager, (req, res) => {
+  try {
+    let list = [];
+    try {
+      list = fs.readdirSync(BACKUP_DIR)
+        .filter(f => /^autobackup-.*\.json$/.test(f))
+        .map(f => { const st = fs.statSync(path.join(BACKUP_DIR, f)); return { name: f, sizeKb: Math.round(st.size / 1024), createdAt: new Date(st.mtimeMs).toISOString() }; })
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    } catch (e) {}
+    res.json({ backups: list });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+app.post('/api/manager/backups/run', requireManager, (req, res) => {
+  try {
+    const name = writeAutoBackup();
+    logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Резервная копия', 'Создал резервную копию вручную', 0, getIp(req), getUserAgent(req));
+    res.json({ success: true, name: name });
+  } catch (e) {
+    res.status(500).json({ error: 'Ошибка создания копии: ' + (e.message || e) });
+  }
+});
+
+app.get('/api/manager/backups/:name', requireManager, (req, res) => {
+  const name = safeBackupName(req.params.name);
+  if (!name) return res.status(400).json({ error: 'Недопустимое имя файла' });
+  const full = path.join(BACKUP_DIR, name);
+  if (!fs.existsSync(full)) return res.status(404).json({ error: 'Файл не найден' });
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="' + name + '"');
+  fs.createReadStream(full).pipe(res);
+});
+
+app.post('/api/manager/backups/:name/restore', requireManager, (req, res) => {
+  const name = safeBackupName(req.params.name);
+  if (!name) return res.status(400).json({ error: 'Недопустимое имя файла' });
+  const full = path.join(BACKUP_DIR, name);
+  if (!fs.existsSync(full)) return res.status(404).json({ error: 'Файл не найден' });
+  try {
+    const dump = JSON.parse(fs.readFileSync(full, 'utf8'));
+    const rows = restoreFromDump(dump);
+    logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Резервная копия', 'Восстановил БД из копии ' + name + ' (' + rows + ' записей)', 0, getIp(req), getUserAgent(req));
+    res.json({ success: true, rows: rows });
+  } catch (e) {
+    res.status(500).json({ error: 'Ошибка восстановления: ' + (e.message || e) });
+  }
 });
 
 app.get('/api/manager/settings/work-on-weekends', requireManager, (req, res) => {

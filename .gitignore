@@ -13,6 +13,7 @@ warehouse.db-shm
 *.sqlite
 *.sqlite3
 data/
+backups/
 
 # Logs / runtime
 *.log
