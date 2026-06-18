@@ -2,6 +2,31 @@
 
 Полный стек: **app** (Node) + **PostgreSQL** + **Redis** + **nginx** (reverse-proxy с HTTPS) + **certbot** (авто-TLS Let's Encrypt).
 
+---
+
+## ⭐ Быстрый старт на чистом сервере (рекомендуется)
+
+Один скрипт ставит Docker, клонирует публичный репозиторий, поднимает весь стек с HTTPS и настраивает **автодеплой** (сервер сам тянет изменения из GitHub и пересобирается). На свежем Ubuntu/Debian-сервере под root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mnazarow/warehouse-queue/main/deploy/server-setup.sh -o server-setup.sh
+sudo bash server-setup.sh
+```
+
+Скрипт спросит домен, e-mail и пароль PostgreSQL — остальное (`SESSION_SECRET`, TLS, systemd-таймер) настроит сам. Предусловия: DNS домена уже указывает на сервер, открыты порты 80/443.
+
+После установки **каждый `git push` в `main`** автоматически выкатывается: systemd-таймер каждые ~3 минуты проверяет GitHub и при новом коммите делает `git pull` + `docker compose up -d --build`.
+
+```bash
+systemctl list-timers warehouse-queue-deploy.timer    # расписание
+journalctl -u warehouse-queue-deploy.service -f       # логи автодеплоя
+systemctl start warehouse-queue-deploy.service        # выкатить прямо сейчас
+```
+
+Эта модель не требует ни токенов, ни GHCR, ни секретов — образ собирается на сервере из публичного репозитория. Ниже — ручной вариант и альтернатива через GHCR + Watchtower.
+
+---
+
 ```
 warehouse-queue/
 ├── Dockerfile                     # образ приложения (Node 20 + psql + сборка better-sqlite3)
@@ -100,7 +125,9 @@ docker compose down -v
 
 ---
 
-# Деплой с GitHub + автообновление (CI/CD)
+# Альтернатива: деплой через GHCR + Watchtower (CI/CD)
+
+> Это **необязательный** вариант вместо git-pull-сборки выше. Здесь образ собирает GitHub Actions и кладёт в GHCR, а на сервере его подхватывает Watchtower (контейнер запускается профилем: `docker compose --profile ghcr up -d`). Подходит, если не хотите собирать образ на самом сервере. Для чистого сервера проще использовать `server-setup.sh` (раздел в начале).
 
 Схема без SSH из CI:
 

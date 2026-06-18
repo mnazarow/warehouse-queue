@@ -138,7 +138,7 @@ echo "==> [server] Issuing TLS certificate (DNS for $DOMAIN must resolve to this
 $SSH "cd '$DEPLOY_PATH' && chmod +x deploy/init-letsencrypt.sh && ./deploy/init-letsencrypt.sh"
 
 echo "==> [server] Starting the stack"
-$SSH "cd '$DEPLOY_PATH' && docker compose up -d"
+$SSH "cd '$DEPLOY_PATH' && docker compose --profile ghcr up -d"
 
 echo
 echo "All done."

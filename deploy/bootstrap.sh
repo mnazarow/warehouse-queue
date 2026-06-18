@@ -79,8 +79,8 @@ echo "==> Issuing TLS certificate for $DOMAIN"
 chmod +x deploy/init-letsencrypt.sh
 ./deploy/init-letsencrypt.sh
 
-echo "==> Starting the full stack"
-docker compose up -d
+echo "==> Starting the full stack (with Watchtower auto-update)"
+docker compose --profile ghcr up -d
 
 echo
 echo "Done. Site: https://$DOMAIN/manager.html  (login admin / admin123 — change it!)"

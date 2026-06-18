@@ -90,6 +90,9 @@ services:
   watchtower:
     image: containrrr/watchtower
     restart: unless-stopped
+    # Only for the GHCR image deploy model: `docker compose --profile ghcr up -d`.
+    # The default (git-pull + rebuild) deploy does not use Watchtower.
+    profiles: ["ghcr"]
     environment:
       WATCHTOWER_LABEL_ENABLE: "true"   # only update labelled containers (app)
       WATCHTOWER_CLEANUP: "true"        # remove old images after update
