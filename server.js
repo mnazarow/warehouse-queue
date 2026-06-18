@@ -277,6 +277,11 @@ function getRedisStatus() {
   try { return redisClient.connected ? 'connected' : 'connecting'; } catch { return 'error'; }
 }
 
+// Backup config — declared before scheduleAutobackup() runs below.
+var BACKUP_DIR = process.env.BACKUP_DIR || path.join(process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : __dirname, 'backups');
+var AUTOBACKUP_INTERVALS = [3600, 7200, 14400, 86400, 604800]; // 1h, 2h, 4h, 1d, 1w
+var autobackupTimer = null;
+
 loadTtlOverrides();
 initRedis();
 scheduleAutobackup();
@@ -2284,10 +2289,6 @@ app.get('/api/manager/about', requireManager, (req, res) => {
 // ---------------------------------------------------------------------------
 // Backup / restore (logical JSON dump, backend-agnostic via the active adapter)
 // ---------------------------------------------------------------------------
-var BACKUP_DIR = process.env.BACKUP_DIR || path.join(process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : __dirname, 'backups');
-var AUTOBACKUP_INTERVALS = [3600, 7200, 14400, 86400, 604800]; // 1h, 2h, 4h, 1d, 1w
-var autobackupTimer = null;
-
 function buildBackupObject() {
   const tables = getSqliteTables();
   const dump = { app: 'warehouse-queue', version: APP_VERSION, createdAt: new Date().toISOString(), dbType: dbAdapter.getType(), tables: {} };
