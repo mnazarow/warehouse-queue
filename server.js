@@ -140,10 +140,56 @@ function redisGet(key) {
   });
 }
 
+// Configurable cache TTLs (seconds), grouped by cache-key category. Defaults
+// match the values used in code; overrides are stored in settings as ttl_<cat>.
+var TTL_CATEGORIES = [
+  { key: 'slots_public',    label: 'Свободные слоты (страница записи)',        def: 30  },
+  { key: 'slots_cabinet',   label: 'Слоты в кабинете менеджера',               def: 10  },
+  { key: 'directories',     label: 'Справочники (склады, номенклатура, контрагенты, кладовщики, менеджеры, классы машин, виды загрузки, подсети, баны)', def: 300 },
+  { key: 'c1_data',         label: 'Данные 1С (заказы, менеджеры, инженеры, логи)', def: 60 },
+  { key: 'messages',        label: 'Сообщения',                                def: 30  },
+  { key: 'stats',           label: 'Статистика',                               def: 30  },
+  { key: 'drivers',         label: 'Водители',                                 def: 30  },
+  { key: 'manager_profile', label: 'Профиль менеджера',                        def: 300 }
+];
+var ttlOverrides = {};
+
+function loadTtlOverrides() {
+  ttlOverrides = {};
+  try {
+    for (var i = 0; i < TTL_CATEGORIES.length; i++) {
+      var cat = TTL_CATEGORIES[i].key;
+      var row = db.prepare("SELECT value FROM settings WHERE key = ?").get('ttl_' + cat);
+      if (row && row.value !== '' && row.value !== null) {
+        var n = parseInt(row.value, 10);
+        if (!isNaN(n) && n >= 0) ttlOverrides[cat] = n;
+      }
+    }
+  } catch (e) {}
+}
+
+function cacheCategory(key) {
+  if (key.indexOf('slots:public:') === 0) return 'slots_public';
+  if (key.indexOf('slots:') === 0 || key.indexOf('slots-id:') === 0) return 'slots_cabinet';
+  if (key.indexOf('manager-me') === 0) return 'manager_profile';
+  if (key.indexOf('stats') === 0) return 'stats';
+  if (key.indexOf('drivers') === 0) return 'drivers';
+  if (key.indexOf('messages') === 0) return 'messages';
+  if (key.indexOf('check-logs') === 0 || key.indexOf('orders-1c') === 0 || key.indexOf('c1-orders') === 0
+      || key.indexOf('managers-1c') === 0 || key.indexOf('engineers-1c') === 0) return 'c1_data';
+  return 'directories';
+}
+
+function effectiveTtl(key, fallback) {
+  var cat = cacheCategory(key);
+  return Object.prototype.hasOwnProperty.call(ttlOverrides, cat) ? ttlOverrides[cat] : fallback;
+}
+
 function redisSet(key, value, ttlSeconds) {
   return new Promise(function(resolve) {
     if (!redisClient || !redisEnabled) return resolve();
-    if (ttlSeconds) redisClient.setex(key, ttlSeconds, value, function() { resolve(); });
+    var ttl = effectiveTtl(key, ttlSeconds);
+    if (ttl) redisClient.setex(key, ttl, value, function() { resolve(); });
     else redisClient.set(key, value, function() { resolve(); });
   });
 }
@@ -206,6 +252,7 @@ function getRedisStatus() {
   try { return redisClient.connected ? 'connected' : 'connecting'; } catch { return 'error'; }
 }
 
+loadTtlOverrides();
 initRedis();
 
 function getIp(req) {
@@ -2246,6 +2293,34 @@ app.post('/api/manager/settings/redis', requireManager, (req, res) => {
   var timer = setTimeout(function() { if (!responded) { responded = true; res.json({ success: true, status: getRedisStatus() }); } }, 1500);
   redisClient.once('ready', function() { if (!responded) { responded = true; clearTimeout(timer); res.json({ success: true, status: 'connected' }); } });
   redisClient.once('error', function() { if (!responded) { responded = true; clearTimeout(timer); res.json({ success: true, status: getRedisStatus() }); } });
+});
+
+app.get('/api/manager/settings/cache-ttl', requireManager, (req, res) => {
+  const items = TTL_CATEGORIES.map(function(c) {
+    return {
+      key: c.key,
+      label: c.label,
+      def: c.def,
+      value: Object.prototype.hasOwnProperty.call(ttlOverrides, c.key) ? ttlOverrides[c.key] : c.def
+    };
+  });
+  res.json({ ttl: items });
+});
+
+app.post('/api/manager/settings/cache-ttl', requireManager, (req, res) => {
+  const incoming = (req.body && req.body.ttl) ? req.body.ttl : {};
+  for (const c of TTL_CATEGORIES) {
+    if (!Object.prototype.hasOwnProperty.call(incoming, c.key)) continue;
+    const n = parseInt(incoming[c.key], 10);
+    if (isNaN(n) || n < 0 || n > 86400) {
+      return res.status(400).json({ error: 'Недопустимый TTL (0–86400 c) для «' + c.label + '»' });
+    }
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('ttl_' + c.key, String(n));
+  }
+  loadTtlOverrides();
+  redisFlushAll();
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', 'Изменил TTL кэша Redis', 0, getIp(req), getUserAgent(req));
+  res.json({ success: true });
 });
 
 app.post('/api/manager/settings/redis/test', requireManager, (req, res) => {
