@@ -329,7 +329,7 @@ function validateAccountsWith1C(accounts, validationUrl, username, password) {
     try {
       const urlObj = new URL(validationUrl);
       const client = urlObj.protocol === 'https:' ? https : http;
-      const reqBodyStr = JSON.stringify({ invoce_number: accounts });
+      const reqBodyStr = JSON.stringify({ invoice_number: accounts });
       const options = {
         hostname: urlObj.hostname,
         port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
@@ -408,7 +408,7 @@ function checkPaymentWith1C(accounts, paymentCheckUrl, username, password) {
     try {
       const urlObj = new URL(paymentCheckUrl);
       const client = urlObj.protocol === 'https:' ? https : http;
-      const reqBodyStr = JSON.stringify({ invoce_number: accounts });
+      const reqBodyStr = JSON.stringify({ invoice_number: accounts });
       const options = {
         hostname: urlObj.hostname,
         port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
@@ -458,7 +458,7 @@ function checkReadyWith1C(accounts, readyCheckUrl, username, password) {
     try {
       const urlObj = new URL(readyCheckUrl);
       const client = urlObj.protocol === 'https:' ? https : http;
-      const reqBodyStr = JSON.stringify({ invoce_number: accounts });
+      const reqBodyStr = JSON.stringify({ invoice_number: accounts });
       const options = {
         hostname: urlObj.hostname,
         port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
@@ -1111,9 +1111,9 @@ app.post('/api/manager/settings/1c/test-order-validation', requireManager, async
   const passSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_password'").get();
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
-  const body = JSON.stringify({ invoce_number: accounts });
+  const body = JSON.stringify({ invoice_number: accounts });
   const maskedAuth = username ? `${username}:XXXX` : ':XXXX';
-  const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
+  const prettyBody = JSON.stringify({ invoice_number: accounts }, null, 2);
   const requestDescription = `POST ${validationUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
     const urlObj = new URL(validationUrl);
@@ -1184,9 +1184,9 @@ app.post('/api/manager/settings/1c/test-payment-check', requireManager, async (r
   const passSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_password'").get();
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
-  const body = JSON.stringify({ invoce_number: accounts });
+  const body = JSON.stringify({ invoice_number: accounts });
   const maskedAuth = username ? `${username}:XXXX` : ':XXXX';
-  const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
+  const prettyBody = JSON.stringify({ invoice_number: accounts }, null, 2);
   const requestDescription = `POST ${paymentCheckUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
     const urlObj = new URL(paymentCheckUrl);
@@ -1250,9 +1250,9 @@ app.post('/api/manager/settings/1c/test-ready-check', requireManager, async (req
   const passSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_password'").get();
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
-  const body = JSON.stringify({ invoce_number: accounts });
+  const body = JSON.stringify({ invoice_number: accounts });
   const maskedAuth = username ? `${username}:XXXX` : ':XXXX';
-  const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
+  const prettyBody = JSON.stringify({ invoice_number: accounts }, null, 2);
   const requestDescription = `POST ${readyCheckUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
     const urlObj = new URL(readyCheckUrl);
@@ -2221,6 +2221,21 @@ app.post('/api/manager/settings/logging', requireManager, (req, res) => {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('logging_enabled', ?)").run(enabled ? '1' : '0');
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', (enabled ? 'Включил' : 'Выключил') + ' ведение журнала', 0, getIp(req), getUserAgent(req));
   res.json({ success: true });
+});
+
+var APP_VERSION = (function() { try { return require('./package.json').version || '?'; } catch (e) { return '?'; } })();
+
+app.get('/api/manager/about', requireManager, (req, res) => {
+  var lastModified = null;
+  try {
+    var files = ['server.js', 'database.js', 'db-adapter.js', 'package.json', 'public/manager.html', 'public/index.html', 'private/storekeeper.html'];
+    var max = 0;
+    for (var i = 0; i < files.length; i++) {
+      try { var m = fs.statSync(path.join(__dirname, files[i])).mtimeMs; if (m > max) max = m; } catch (e) {}
+    }
+    if (max) lastModified = new Date(max).toISOString();
+  } catch (e) {}
+  res.json({ version: APP_VERSION, lastModified: lastModified });
 });
 
 app.get('/api/manager/settings/work-on-weekends', requireManager, (req, res) => {

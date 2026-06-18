@@ -701,6 +701,10 @@
       <div class="section-header">
         <h2>Настройки</h2>
       </div>
+      <div style="max-width:600px;margin-bottom:18px;padding:10px 14px;background:rgba(0,0,0,0.04);border-radius:8px;font-size:0.85rem;color:#4a5568">
+        <div>Версия программы: <b id="aboutVersion">—</b></div>
+        <div>Последнее изменение: <b id="aboutModified">—</b></div>
+      </div>
       <div style="max-width:600px">
         <div class="form-group" style="margin-bottom:16px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
@@ -2035,7 +2039,19 @@
       if (name === 'bannedphones') loadBannedPhones();
       if (name === 'bannedips') loadBannedIps();
       if (name === 'vehicleclasses') { loadVehicleClasses(); loadLoadTypes(); }
-      if (name === 'settings') { loadSettings(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
+      if (name === 'settings') { loadAbout(); loadSettings(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
+    }
+
+    async function loadAbout() {
+      try {
+        const res = await fetch('/api/manager/about', { credentials: 'include' });
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById('aboutVersion').textContent = data.version || '—';
+        document.getElementById('aboutModified').textContent = data.lastModified
+          ? new Date(data.lastModified).toLocaleString('ru-RU')
+          : '—';
+      } catch {}
     }
 
     async function loadSettings() {
@@ -4326,9 +4342,9 @@
       urlEl.textContent = `POST ${url}${separator}`;
       urlEl.style.color = '#2d3748';
       if (username) {
-        authEl.innerHTML = `Authorization: Basic ${username}:XXXX<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+        authEl.innerHTML = `Authorization: Basic ${username}:XXXX<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
       } else {
-        authEl.innerHTML = `Authorization: Basic :XXXX<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+        authEl.innerHTML = `Authorization: Basic :XXXX<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
       }
     }
 
@@ -4371,9 +4387,9 @@
       const separator = url.includes('?') ? '&' : '?';
       urlEl.textContent = `POST ${url}${separator}`;
       if (username) {
-        authEl.innerHTML = `Authorization: Basic ${username}:XXXX<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+        authEl.innerHTML = `Authorization: Basic ${username}:XXXX<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
       } else {
-        authEl.innerHTML = `Authorization: Basic :XXXX<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+        authEl.innerHTML = `Authorization: Basic :XXXX<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
       }
     }
 
