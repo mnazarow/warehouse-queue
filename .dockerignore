@@ -1,0 +1,17 @@
+# Never copy host build artifacts or local data into the image.
+node_modules
+npm-debug.log
+# Local SQLite database and WAL/SHM sidecars
+warehouse.db
+warehouse.db-wal
+warehouse.db-shm
+data
+# VCS / editor / docs
+.git
+.gitignore
+.env
+*.md
+deploy
+Dockerfile
+docker-compose.yml
+.dockerignore

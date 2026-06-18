@@ -1,0 +1,16 @@
+{
+  "name": "warehouse-queue",
+  "version": "1.0.0",
+  "description": "Warehouse queue system with online booking and manager dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "express": "^4.21.0",
+    "express-session": "^1.18.0",
+    "redis": "^3.1.2"
+  }
+}

@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Запись в очередь на склад</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    #bookingModal .modal { font-size: 0.75rem; }
+    #bookingModal .modal h2 { font-size: 1rem; }
+    #bookingModal .modal input,
+    #bookingModal .modal textarea,
+    #bookingModal .modal select { font-size: 0.75rem !important; padding: 6px 8px !important; }
+    #bookingModal .modal label { font-size: 0.7rem; }
+    #bookingModal .modal .btn { font-size: 0.75rem; padding: 6px 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <img src="/logo.png" alt="Логотип" class="logo">
+    <h1>Онлайн-запись на склад</h1>
+    <p class="subtitle">Выберите дату и время для визита. Работаем в будние дни с 9:00 до 17:30.</p>
+
+    <div class="tabs">
+      <button class="tab active" data-type="small">До 3-х товаров в накладной (15 мин)</button>
+      <button class="tab" data-type="bulk">Сборный заказ (30 мин)</button>
+    </div>
+
+    <div class="date-input">
+      <label for="datePicker">Дата:</label>
+      <input type="date" id="datePicker">
+    </div>
+
+    <div class="date-input" style="margin-top:12px">
+      <label style="font-size:1.2rem;font-weight:700;color:#e53e3e;display:block;margin-bottom:8px">Склад:</label>
+      <div id="warehouseSelector" class="warehouse-selector"></div>
+    </div>
+
+    <div id="slotsContainer">
+      <p class="no-slots">Выберите дату, чтобы увидеть свободные окна</p>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="warehouseConfirmModal">
+    <div class="modal" style="max-width:400px;text-align:center">
+      <h2>Подтверждение склада</h2>
+      <p style="color:#4a5568;margin:0 0 8px 0;font-size:0.95rem">Вы выбрали запись:</p>
+      <p id="warehouseConfirmInfo" style="font-weight:600;color:#2d3748;margin:0 0 16px 0;font-size:1.05rem"></p>
+      <div style="background:#fff5f5;border:1px solid #fc8181;border-radius:8px;padding:16px;margin-bottom:20px">
+        <div style="font-size:0.85rem;color:#718096;margin-bottom:4px">Склад</div>
+        <div id="warehouseConfirmName" class="blink-red" style="font-size:1.2rem;font-weight:700"></div>
+      </div>
+      <div class="modal-actions" style="justify-content:center">
+        <button class="btn btn-secondary" onclick="closeWarehouseConfirm()">Отмена</button>
+        <button class="btn btn-primary" onclick="proceedToBooking()">Продолжить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="bookingModal">
+    <div class="modal">
+      <h2>Подтверждение записи</h2>
+      <div class="info" id="modalInfo"></div>
+      <div class="info" style="margin-top:8px;background:#fff5f5;border-color:#fc8181">
+        <strong style="font-size:1.1rem">Склад:</strong> <span id="bookingModalWarehouse" style="font-size:1.2rem;font-weight:700;color:#e53e3e"></span>
+      </div>
+      <div class="form-group">
+        <label for="customerName">Ваше имя</label>
+        <input type="text" id="customerName" placeholder="Иван Иванов">
+      </div>
+      <div class="form-group">
+        <label for="customerPhone">Телефон</label>
+        <input type="tel" id="customerPhone" placeholder="+7 (9XX) XXX-XX-XX">
+      </div>
+      <div class="form-group">
+        <label for="customerOrganization">Организация <span style="color:#a0aec0;font-weight:400">(необязательно)</span></label>
+        <input type="text" id="customerOrganization" placeholder="ООО «Ромашка»">
+      </div>
+      <div class="form-group">
+        <label for="customerAccount">Номера счетов (до 10, каждый с новой строки)</label>
+        <textarea id="customerAccount" rows="4" placeholder="40817810000000000001&#10;40817810000000000002" style="width:100%;padding:10px 12px;border:2px solid #e2e8f0;border-radius:6px;font-size:1rem;font-family:inherit;resize:vertical"></textarea>
+        <div id="accountCounter" style="font-size:0.8rem;color:#718096;margin-top:4px">0 / 10</div>
+      </div>
+      <div class="form-group">
+        <label for="customerComment">Комментарий</label>
+        <textarea id="customerComment" rows="3" placeholder="Дополнительная информация к заказу" style="width:100%;padding:10px 12px;border:2px solid #e2e8f0;border-radius:6px;font-size:1rem;font-family:inherit;resize:vertical"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="vehicleClassSelect">Класс машины <span style="color:#e53e3e">*</span></label>
+        <select id="vehicleClassSelect" style="width:100%;padding:10px 12px;border:2px solid #e2e8f0;border-radius:6px;font-size:1rem;font-family:inherit;background:#fff">
+          <option value="">— Выберите —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="loadTypeSelect">Вид загрузки <span style="color:#e53e3e">*</span></label>
+        <select id="loadTypeSelect" style="width:100%;padding:10px 12px;border:2px solid #e2e8f0;border-radius:6px;font-size:1rem;font-family:inherit;background:#fff">
+          <option value="">— Выберите —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Капча: <strong id="captchaExpression"></strong></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" id="captchaAnswer" placeholder="?" style="width:100px;padding:10px 12px;border:2px solid #e2e8f0;border-radius:6px;font-size:1rem;text-align:center" autocomplete="off">
+          <button class="btn btn-secondary btn-sm" onclick="loadCaptcha()" style="white-space:nowrap" type="button">Обновить</button>
+        </div>
+      </div>
+      <div id="validationErrorBlock" style="display:none;margin-bottom:16px;padding:14px;background:#fff5f5;border:2px solid #fc8181;border-radius:8px;text-align:center">
+        <div style="font-size:1rem;font-weight:600;color:#c53030;margin-bottom:8px" id="validationErrorMessage"></div>
+        <div style="display:flex;gap:10px;justify-content:center">
+          <button class="btn btn-secondary" onclick="hideValidationError()">Исправить</button>
+          <button class="btn btn-primary" onclick="forceBooking()" style="background:#dd6b20">Продолжить</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+        <button class="btn btn-primary" onclick="confirmBooking()" id="bookBtn">Записаться</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="whFireworks" style="position:fixed;inset:0;pointer-events:none;z-index:10000;overflow:hidden"></div>
+
+  <div class="modal-overlay" id="successModal">
+    <div class="modal" style="position:relative;overflow:hidden">
+      <div id="fireworks"></div>
+      <div class="success-msg open">
+        <h2>Вы записаны!</h2>
+        <p id="successInfo"></p>
+        <button class="btn btn-primary" onclick="closeSuccess()">Готово</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const SLOT_NAMES = { small: 'До 3-х товаров в накладной', bulk: 'Сборный заказ' };
+
+    let currentType = 'small';
+    let selectedSlotId = null;
+    let allowNoAccount = true;
+
+    function escapeHtml(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+    function jsStr(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\r?\n/g,' ');}
+
+    async function loadAllowNoAccount() {
+      try {
+        const res = await fetch('/api/public/settings/allow-booking-without-account');
+        const data = await res.json();
+        allowNoAccount = data.allow;
+        updateAccountRequiredLabel();
+      } catch {}
+    }
+
+    function updateAccountRequiredLabel() {
+      const label = document.querySelector('label[for="customerAccount"]');
+      if (label) {
+        if (!allowNoAccount) {
+          label.innerHTML = 'Номера счетов (до 10, каждый с новой строки) <span style="color:#e53e3e">*</span>';
+        } else {
+          label.innerHTML = 'Номера счетов (до 10, каждый с новой строки)';
+        }
+      }
+    }
+    let selectedWarehouseName = '';
+    let pendingSlot = {};
+
+    const datePicker = document.getElementById('datePicker');
+    const slotsContainer = document.getElementById('slotsContainer');
+
+    function initDate() {
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth() + 1).padStart(2, '0');
+      const d = String(today.getDate()).padStart(2, '0');
+      datePicker.value = `${y}-${m}-${d}`;
+      datePicker.min = `${y}-${m}-${d}`;
+    }
+
+    async function loadWarehouses() {
+      try {
+        const res = await fetch('/api/warehouses');
+        const data = await res.json();
+        const container = document.getElementById('warehouseSelector');
+        container.innerHTML = '';
+        if (!data.warehouses || !data.warehouses.length) {
+          container.innerHTML = '<div class="no-slots">Нет складов</div>';
+          return;
+        }
+        let selectedId = null;
+        for (const w of data.warehouses) {
+          const card = document.createElement('div');
+          card.className = 'wh-card';
+          if (w.is_default) { card.classList.add('active'); selectedId = w.id; }
+          card.dataset.id = w.id;
+          card.dataset.name = w.name;
+          card.textContent = w.name;
+          card.addEventListener('click', () => {
+            container.querySelectorAll('.wh-card').forEach(c => c.classList.remove('active'));
+            card.classList.add('active');
+            loadSlots();
+          });
+          container.appendChild(card);
+        }
+        if (selectedId) loadSlots();
+      } catch {}
+    }
+
+    async function loadSlots() {
+      const date = datePicker.value;
+      const activeCard = document.querySelector('#warehouseSelector .wh-card.active');
+      const warehouseId = activeCard ? activeCard.dataset.id : '';
+      if (!date) return;
+      slotsContainer.innerHTML = '<p class="no-slots">Загрузка...</p>';
+      try {
+        const res = await fetch(`/api/slots?date=${date}&type=${currentType}&warehouse_id=${warehouseId || ''}`);
+        const data = await res.json();
+        if (!data.weekday) {
+          slotsContainer.innerHTML = '<p class="no-slots">Выберите будний день (пн–пт)</p>';
+          return;
+        }
+        if (!res.ok || !data || !Array.isArray(data.slots)) {
+          slotsContainer.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
+          return;
+        }
+        if (data.slots.length === 0) {
+          slotsContainer.innerHTML = '<p class="no-slots">На выбранную дату слоты не найдены</p>';
+          return;
+        }
+        renderSlots(data.slots);
+      } catch (e) {
+        slotsContainer.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
+      }
+    }
+
+    function renderSlots(slots) {
+      let html = '<div class="slots-grid">';
+      for (const slot of slots) {
+        let cssClass = '';
+        let labelText;
+        let clickHandler = '';
+        if (slot.past) {
+          cssClass = 'booked past';
+          labelText = 'Просрочено';
+        } else if (slot.completed) {
+          cssClass = 'booked completed';
+          labelText = 'Выполнено';
+        } else if (slot.assembling) {
+          cssClass = 'booked assembling';
+          labelText = 'На сборке';
+        } else if (slot.in_progress) {
+          cssClass = 'booked in-progress';
+          labelText = 'У кладовщика';
+        } else if (slot.is_booked && slot.confirmed) {
+          cssClass = 'booked confirmed';
+          labelText = 'Подтверждён';
+        } else if (slot.is_booked) {
+          cssClass = 'booked';
+          labelText = 'Занято';
+        } else {
+          labelText = 'Свободно';
+          clickHandler = `showWarehouseConfirm(${slot.id}, '${jsStr(slot.time_start)}', '${jsStr(slot.time_end)}')`;
+        }
+        html += `
+          <div class="slot ${cssClass}" data-id="${escapeHtml(slot.id)}" onclick="${escapeHtml(clickHandler)}">
+            <div class="time">${escapeHtml(slot.time_start)} – ${escapeHtml(slot.time_end)}</div>
+            <div class="label">${escapeHtml(labelText)}</div>
+          </div>
+        `;
+      }
+      html += '</div>';
+      slotsContainer.innerHTML = html;
+    }
+
+    function updateAccountCounter() {
+      const val = document.getElementById('customerAccount').value;
+      const lines = val.split('\n').filter(l => l.trim());
+      document.getElementById('accountCounter').textContent = `${lines.length} / 10`;
+    }
+
+    function showWarehouseConfirm(id, timeStart, timeEnd) {
+      pendingSlot = { id, timeStart, timeEnd };
+      const activeCard = document.querySelector('#warehouseSelector .wh-card.active');
+      const whName = activeCard ? activeCard.dataset.name : '';
+      selectedWarehouseName = whName;
+      document.getElementById('warehouseConfirmInfo').textContent =
+        `${datePicker.value}, ${timeStart}–${timeEnd}, ${SLOT_NAMES[currentType]}`;
+      document.getElementById('warehouseConfirmName').textContent = whName;
+      document.getElementById('warehouseConfirmModal').classList.add('open');
+    }
+
+    function closeWarehouseConfirm() {
+      document.getElementById('warehouseConfirmModal').classList.remove('open');
+      pendingSlot = {};
+    }
+
+    function proceedToBooking() {
+      document.getElementById('whFireworks').innerHTML = `
+        <div class="nuke-flash"></div>
+        <div class="nuke-fireball"></div>
+        <div class="nuke-shockwave"></div>
+        <div class="nuke-mushroom">
+          <div class="nuke-mushroom-stem"></div>
+          <div class="nuke-mushroom-top"></div>
+        </div>
+      `;
+      setTimeout(() => {
+        document.getElementById('warehouseConfirmModal').classList.remove('open');
+        document.getElementById('whFireworks').innerHTML = '';
+        openBooking(pendingSlot.id, pendingSlot.timeStart, pendingSlot.timeEnd);
+      }, 2000);
+    }
+
+    async function openBooking(id, timeStart, timeEnd) {
+      selectedSlotId = id;
+      document.getElementById('modalInfo').textContent =
+        `${datePicker.value}, ${timeStart}–${timeEnd}, ${SLOT_NAMES[currentType]}`;
+      document.getElementById('bookingModalWarehouse').textContent = selectedWarehouseName;
+      document.getElementById('customerName').value = '';
+      document.getElementById('customerPhone').value = '';
+      document.getElementById('customerOrganization').value = '';
+      document.getElementById('customerAccount').value = '';
+      document.getElementById('customerComment').value = '';
+      document.getElementById('captchaAnswer').value = '';
+      document.getElementById('vehicleClassSelect').value = '';
+      document.getElementById('loadTypeSelect').value = '';
+      hideValidationError();
+      loadCaptcha();
+      try {
+        const vcRes = await fetch('/api/public/vehicle-classes');
+        const vcData = await vcRes.json();
+        const vcSel = document.getElementById('vehicleClassSelect');
+        vcSel.innerHTML = '<option value="">— Выберите —</option>' + vcData.classes.map(c => '<option value="' + escapeHtml(c.id) + '">' + escapeHtml(c.name) + '</option>').join('');
+      } catch {}
+      try {
+        const ltRes = await fetch('/api/public/load-types');
+        const ltData = await ltRes.json();
+        const ltSel = document.getElementById('loadTypeSelect');
+        ltSel.innerHTML = '<option value="">— Выберите —</option>' + ltData.types.map(t => '<option value="' + escapeHtml(t.id) + '">' + escapeHtml(t.name) + '</option>').join('');
+      } catch {}
+      document.getElementById('bookingModal').classList.add('open');
+    }
+
+    async function loadCaptcha() {
+      try {
+        const res = await fetch('/api/captcha');
+        const data = await res.json();
+        document.getElementById('captchaExpression').textContent = data.expression;
+      } catch {}
+    }
+
+    function closeModal() {
+      document.getElementById('bookingModal').classList.remove('open');
+      selectedSlotId = null;
+      hideValidationError();
+    }
+
+    let bookingForce = false;
+
+    function showValidationError(msg) {
+      document.getElementById('validationErrorMessage').textContent = msg;
+      document.getElementById('validationErrorBlock').style.display = 'block';
+      document.getElementById('bookBtn').style.display = 'none';
+    }
+
+    function hideValidationError() {
+      document.getElementById('validationErrorBlock').style.display = 'none';
+      document.getElementById('bookBtn').style.display = 'inline-block';
+      loadCaptcha();
+      document.getElementById('captchaAnswer').value = '';
+    }
+
+    async function forceBooking() {
+      bookingForce = true;
+      hideValidationError();
+      await confirmBooking();
+      bookingForce = false;
+    }
+
+    async function confirmBooking() {
+      const name = document.getElementById('customerName').value.trim();
+      const phone = document.getElementById('customerPhone').value.replace(/\D/g, '');
+      const organization = document.getElementById('customerOrganization').value.trim();
+      const accountRaw = document.getElementById('customerAccount').value;
+      const comment = document.getElementById('customerComment').value.trim();
+      const accounts = accountRaw.split('\n').map(l => l.trim()).filter(l => l);
+      if (!name || !phone) {
+        alert('Пожалуйста, заполните имя и телефон');
+        return;
+      }
+      if (!allowNoAccount && accounts.length === 0) {
+        alert('Необходимо указать номер счета');
+        return;
+      }
+      if (accounts.length > 10) {
+        alert('Не более 10 номеров счетов');
+        return;
+      }
+      const vehicleClassId = document.getElementById('vehicleClassSelect').value;
+      const loadTypeId = document.getElementById('loadTypeSelect').value;
+      if (!vehicleClassId) {
+        alert('Выберите класс машины');
+        return;
+      }
+      if (!loadTypeId) {
+        alert('Выберите вид загрузки');
+        return;
+      }
+      const bookBtn = document.getElementById('bookBtn');
+      try {
+        const captchaAnswer = document.getElementById('captchaAnswer').value.trim();
+        if (!captchaAnswer) {
+          alert('Решите капчу');
+          return;
+        }
+        if (bookBtn) bookBtn.disabled = true;
+        const body = { name, phone, organization: organization || undefined, account: accounts.join('\n'), comment, captchaAnswer: Number(captchaAnswer), vehicleClassId: Number(vehicleClassId), loadTypeId: Number(loadTypeId) };
+        if (bookingForce) body.force = true;
+        const bookedSlotId = selectedSlotId;
+        const res = await fetch(`/api/slots/${bookedSlotId}/book`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!data.success) {
+          if (data.validationFailed) {
+            showValidationError(data.error);
+            return;
+          }
+          if (data.error === 'Invalid captcha answer') {
+            alert('Неверный ответ капчи');
+            loadCaptcha();
+            document.getElementById('captchaAnswer').value = '';
+            return;
+          }
+          alert(data.error || 'Ошибка при записи');
+          return;
+        }
+        if (data.warning) {
+          if (!confirm(data.warning + '\n\nПродолжить запись?')) {
+            return;
+          }
+        }
+        const slotEl = document.querySelector(`.slot[data-id="${bookedSlotId}"]`);
+        const bookedTime = slotEl?.querySelector('.time')?.textContent || '';
+        closeModal();
+        if (slotEl) {
+          slotEl.classList.add('booked');
+          slotEl.querySelector('.label').textContent = 'Занято';
+          slotEl.onclick = null;
+        }
+        document.getElementById('successInfo').textContent =
+          `${datePicker.value}, ${bookedTime}, ${SLOT_NAMES[currentType]}`;
+        document.getElementById('successModal').classList.add('open');
+        startFireworks();
+      } catch (e) {
+        alert('Ошибка соединения');
+      } finally {
+        if (bookBtn) bookBtn.disabled = false;
+      }
+    }
+
+    function startFireworks() {
+      const container = document.getElementById('fireworks');
+      container.innerHTML = '';
+      const colors = ['#e53e3e','#dd6b20','#d69e2e','#38a169','#3182ce','#805ad5','#d53f8c','#00bcd4'];
+      for (let i = 0; i < 60; i++) {
+        const el = document.createElement('div');
+        el.className = 'confetti';
+        el.style.left = Math.random() * 100 + '%';
+        el.style.top = Math.random() * 30 + '%';
+        el.style.background = colors[Math.floor(Math.random() * colors.length)];
+        el.style.width = (4 + Math.random() * 6) + 'px';
+        el.style.height = el.style.width;
+        el.style.animationDelay = Math.random() * 0.8 + 's';
+        el.style.borderRadius = Math.random() > 0.5 ? '50%' : '2px';
+        container.appendChild(el);
+      }
+    }
+
+    function closeSuccess() {
+      document.getElementById('successModal').classList.remove('open');
+    }
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentType = tab.dataset.type;
+        loadSlots();
+      });
+    });
+
+    datePicker.addEventListener('change', loadSlots);
+    datePicker.addEventListener('input', loadSlots);
+
+    document.getElementById('customerAccount').addEventListener('input', updateAccountCounter);
+    document.getElementById('bookingModal').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+
+    document.getElementById('customerPhone').addEventListener('input', function() {
+      let v = this.value.replace(/\D/g, '');
+      if (!v.startsWith('7') && v.length > 0) v = '7' + v;
+      v = v.slice(0, 11);
+      let m = '+7';
+      if (v.length > 1) m += ' (' + v.slice(1, 4);
+      if (v.length >= 5) m += ') ' + v.slice(4, 7);
+      if (v.length >= 8) m += '-' + v.slice(7, 9);
+      if (v.length >= 10) m += '-' + v.slice(9, 11);
+      this.value = m;
+    });
+
+    initDate();
+    loadWarehouses();
+    loadAllowNoAccount();
+    setInterval(loadSlots, 30000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+services:
+  app:
+    build: .
+    # Local build tags as warehouse-queue:latest. In production set APP_IMAGE in
+    # .env to the GHCR image (e.g. ghcr.io/owner/repo:latest) so the server can
+    # `docker compose pull app` the CI-built image instead of building.
+    image: ${APP_IMAGE:-warehouse-queue:latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3000"
+      DB_PATH: /app/data/warehouse.db
+      TRUST_PROXY: "1"                 # behind nginx -> trust X-Forwarded-For
+      SEED_CONNECTORS: "1"             # seed PG/Redis connection settings on first boot
+      PGSQL_HOST: postgres
+      PGSQL_PORT: "5432"
+      PGSQL_DATABASE: ${POSTGRES_DB}
+      PGSQL_USER: ${POSTGRES_USER}
+      PGSQL_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_ENABLED: "1"
+      SESSION_SECRET: ${SESSION_SECRET}
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    expose:
+      - "3000"
+    networks: [web]
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [web]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks: [web]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      # Only substitute ${DOMAIN} in templates; leave nginx's own $vars intact.
+      NGINX_ENVSUBST_FILTER: "^DOMAIN$$"
+    volumes:
+      - ./deploy/nginx/app.conf.template:/etc/nginx/templates/app.conf.template:ro
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    networks: [web]
+
+  certbot:
+    image: certbot/certbot
+    restart: unless-stopped
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    # Renew twice a day; nginx picks up new certs on its own reload schedule.
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+
+volumes:
+  app_data:
+  pg_data:
+  redis_data:
+  certbot_conf:
+  certbot_www:
+
+networks:
+  web:

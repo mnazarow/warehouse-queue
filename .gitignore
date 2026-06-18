@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Secrets / environment
+.env
+*.env
+!.env.example
+
+# Local databases (contain real data, password hashes, tokens — never commit)
+warehouse.db
+warehouse.db-wal
+warehouse.db-shm
+*.sqlite
+*.sqlite3
+data/
+
+# Logs / runtime
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# TLS / certbot artifacts (if mounted locally)
+deploy/letsencrypt/
