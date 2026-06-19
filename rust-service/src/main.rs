@@ -1735,35 +1735,41 @@ fn h_public_slots(db: &mut Db, ctx: &Ctx) -> Resp {
     }
     let wh = q(ctx, "warehouse_id");
     let cache_key = format!("slots:public:{date}:{typ}:{wh}");
-    if let Some(s) = cache_get(db, &cache_key) {
-        return Resp::raw(200, s, "application/json; charset=utf-8");
-    }
-    ensure_slots(db, &date, &typ);
-    let wh_id: Option<i64> = if wh.is_empty() { None } else { wh.parse::<i64>().ok() };
-    let rows = match wh_id {
-        Some(id) => db.query_maps("SELECT id,date,type,time_start,time_end,is_booked,confirmed,in_progress,completed,assembling,warehouse_id FROM slots WHERE date=? AND type=? AND warehouse_id=? ORDER BY time_start", &[json!(date), json!(typ), json!(id)]),
-        None => db.query_maps("SELECT id,date,type,time_start,time_end,is_booked,confirmed,in_progress,completed,assembling,warehouse_id FROM slots WHERE date=? AND type=? AND warehouse_id IS NULL ORDER BY time_start", &[json!(date), json!(typ)]),
+
+    // В кэш кладём только сырые строки (статус брони). Доступность по времени
+    // ("past") считаем заново на каждый запрос, чтобы порог "минимум за час" был
+    // точным независимо от TTL кэша (как в Node-варианте).
+    let raw: Vec<Map<String, Value>> = if let Some(s) = cache_get(db, &cache_key) {
+        serde_json::from_str(&s).unwrap_or_default()
+    } else {
+        ensure_slots(db, &date, &typ);
+        let wh_id: Option<i64> = if wh.is_empty() { None } else { wh.parse::<i64>().ok() };
+        let rows = match wh_id {
+            Some(id) => db.query_maps("SELECT id,date,type,time_start,time_end,is_booked,confirmed,in_progress,completed,assembling,warehouse_id FROM slots WHERE date=? AND type=? AND warehouse_id=? ORDER BY time_start", &[json!(date), json!(typ), json!(id)]),
+            None => db.query_maps("SELECT id,date,type,time_start,time_end,is_booked,confirmed,in_progress,completed,assembling,warehouse_id FROM slots WHERE date=? AND type=? AND warehouse_id IS NULL ORDER BY time_start", &[json!(date), json!(typ)]),
+        };
+        if cache_enabled(db) {
+            cache_set(db, &cache_key, &serde_json::to_string(&rows).unwrap_or_default(), ttl_for(db, "slots_public"));
+        }
+        rows
     };
+
     let now = Local::now();
-    let min_t = now + CDur::hours(1);
-    let max_t = now + CDur::days(14);
+    let min_t = now + CDur::hours(1); // свободен только если старт >= чем через час
+    let max_t = now + CDur::days(14); // и не дальше 2 недель
     let mut out = vec![];
-    for m in &rows {
+    for m in &raw {
         let d = m.get("date").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let tss = m.get("time_start").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let past = match slot_dt(&d, &tss) {
             Some(sd) => sd < min_t || sd > max_t,
-            None => false,
+            None => true,
         };
         let mut mm = m.clone();
         mm.insert("past".into(), json!(past));
         out.push(Value::Object(mm));
     }
-    let payload = json!({"slots": out, "weekday": true});
-    if cache_enabled(db) {
-        cache_set(db, &cache_key, &payload.to_string(), ttl_for(db, "slots_public"));
-    }
-    Resp::json(200, payload)
+    Resp::json(200, json!({"slots": out, "weekday": true}))
 }
 
 fn h_book(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx, id_str: &str) -> Resp {

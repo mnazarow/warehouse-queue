@@ -173,47 +173,65 @@ func hPublicSlots(w http.ResponseWriter, r *http.Request) {
 	}
 	whID := q.Get("warehouse_id")
 	cacheKey := fmt.Sprintf("slots:public:%s:%s:%s", date, typ, whID)
+
+	// В кэш кладём только сырые строки (статус брони). Доступность по времени
+	// ("past") считаем заново на каждый запрос, чтобы порог "минимум за час"
+	// был точным независимо от TTL кэша (как в Node-варианте).
+	var raw []map[string]any
 	if s, ok := cacheGet(cacheKey); ok {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Write([]byte(s))
-		return
-	}
-	ensureSlots(date, typ)
-	var rows *sql.Rows
-	var err error
-	if whID == "" {
-		rows, err = db.qu("SELECT id,date,type,time_start,time_end,is_booked,confirmed,in_progress,completed,assembling,warehouse_id FROM slots WHERE date=? AND type=? AND warehouse_id IS NULL ORDER BY time_start", date, typ)
+		json.Unmarshal([]byte(s), &raw)
 	} else {
-		rows, err = db.qu("SELECT id,date,type,time_start,time_end,is_booked,confirmed,in_progress,completed,assembling,warehouse_id FROM slots WHERE date=? AND type=? AND warehouse_id=? ORDER BY time_start", date, typ, whID)
-	}
-	if err != nil {
-		writeJSON(w, 500, map[string]any{"error": err.Error()})
-		return
-	}
-	defer rows.Close()
-	out := []map[string]any{}
-	minTime := time.Now().Add(time.Hour)
-	maxTime := time.Now().Add(14 * 24 * time.Hour)
-	for rows.Next() {
-		var id int
-		var d, t, tss, tse string
-		var ib, cf, ip, cmp, asm int
-		var wh *int
-		rows.Scan(&id, &d, &t, &tss, &tse, &ib, &cf, &ip, &cmp, &asm, &wh)
-		sd, _ := time.ParseInLocation("2006-01-02 15:04", d+" "+tss, time.Local)
-		out = append(out, map[string]any{
-			"id": id, "date": d, "type": t, "time_start": tss, "time_end": tse,
-			"is_booked": ib, "confirmed": cf, "in_progress": ip, "completed": cmp, "assembling": asm,
-			"warehouse_id": wh, "past": sd.Before(minTime) || sd.After(maxTime),
-		})
-	}
-	payload := map[string]any{"slots": out, "weekday": true}
-	if cacheEnabled() {
-		if b, err := json.Marshal(payload); err == nil {
-			cacheSet(cacheKey, string(b), ttlFor("slots_public"))
+		ensureSlots(date, typ)
+		var rows *sql.Rows
+		var err error
+		if whID == "" {
+			rows, err = db.qu("SELECT id,date,type,time_start,time_end,is_booked,confirmed,in_progress,completed,assembling,warehouse_id FROM slots WHERE date=? AND type=? AND warehouse_id IS NULL ORDER BY time_start", date, typ)
+		} else {
+			rows, err = db.qu("SELECT id,date,type,time_start,time_end,is_booked,confirmed,in_progress,completed,assembling,warehouse_id FROM slots WHERE date=? AND type=? AND warehouse_id=? ORDER BY time_start", date, typ, whID)
+		}
+		if err != nil {
+			writeJSON(w, 500, map[string]any{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int
+			var d, t, tss, tse string
+			var ib, cf, ip, cmp, asm int
+			var wh *int
+			rows.Scan(&id, &d, &t, &tss, &tse, &ib, &cf, &ip, &cmp, &asm, &wh)
+			raw = append(raw, map[string]any{
+				"id": id, "date": d, "type": t, "time_start": tss, "time_end": tse,
+				"is_booked": ib, "confirmed": cf, "in_progress": ip, "completed": cmp, "assembling": asm,
+				"warehouse_id": wh,
+			})
+		}
+		if cacheEnabled() {
+			if b, err := json.Marshal(raw); err == nil {
+				cacheSet(cacheKey, string(b), ttlFor("slots_public"))
+			}
 		}
 	}
-	writeJSON(w, 200, payload)
+
+	now := time.Now()
+	minTime := now.Add(time.Hour)             // свободен только если старт >= чем через час
+	maxTime := now.Add(14 * 24 * time.Hour)   // и не дальше 2 недель
+	out := []map[string]any{}
+	for _, m := range raw {
+		d := fmt.Sprintf("%v", m["date"])
+		tss := fmt.Sprintf("%v", m["time_start"])
+		past := true
+		if sd, err := time.ParseInLocation("2006-01-02 15:04", d+" "+tss, time.Local); err == nil {
+			past = sd.Before(minTime) || sd.After(maxTime)
+		}
+		mm := map[string]any{}
+		for k, v := range m {
+			mm[k] = v
+		}
+		mm["past"] = past
+		out = append(out, mm)
+	}
+	writeJSON(w, 200, map[string]any{"slots": out, "weekday": true})
 }
 
 func hBook(w http.ResponseWriter, r *http.Request, idStr string) {
