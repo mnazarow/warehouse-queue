@@ -4794,6 +4794,10 @@
       updateC1OrderValidationExample();
     }
 
+    function b64utf8(s) {
+      try { return btoa(unescape(encodeURIComponent(s))); } catch (e) { return ''; }
+    }
+
     function updateC1OrderValidationExample() {
       const url = document.getElementById('c1OrderValidationUrl').value.trim();
       const username = document.getElementById('c1Username').value.trim();
@@ -4807,10 +4811,8 @@
         return;
       }
       urlEl.style.color = '#2d3748';
-      const separator = url.includes('?') ? '&' : '?';
-      urlEl.textContent = `POST ${url}${separator}`;
-      urlEl.style.color = '#2d3748';
-      authEl.innerHTML = `Authorization: Basic ${username}:${password}<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+      urlEl.textContent = `POST ${url}`;
+      authEl.innerHTML = `Authorization: Basic ${b64utf8(username + ':' + password)}<br><span style="color:#a0aec0">(логин: ${username} · пароль: ${password})</span><br>Content-Type: application/json<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
     }
 
     async function saveC1PaymentCheckUrl() {
@@ -4850,9 +4852,8 @@
         return;
       }
       urlEl.style.color = '#2d3748';
-      const separator = url.includes('?') ? '&' : '?';
-      urlEl.textContent = `POST ${url}${separator}`;
-      authEl.innerHTML = `Authorization: Basic ${username}:${password}<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+      urlEl.textContent = `POST ${url}`;
+      authEl.innerHTML = `Authorization: Basic ${b64utf8(username + ':' + password)}<br><span style="color:#a0aec0">(логин: ${username} · пароль: ${password})</span><br>Content-Type: application/json<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
     }
 
     async function saveC1Notes() {
@@ -4966,7 +4967,9 @@
           resultEl.style.border = '1px solid #fc8181';
           resultEl.style.color = '#c53030';
         }
-        resultEl.textContent = `Запрос:\n${data.request || '(недоступен)'}\n\nHTTP статус: ${data.httpStatus}\nПоле status: ${data.parsedStatus || '(не найдено)'}\nКлючи JSON: ${data.jsonKeys ? data.jsonKeys.join(', ') : '(не JSON)'}\n\nТело ответа:\n${data.body || '(пусто)'}`;
+        const verdict = data.success ? '✓ Проверка пройдена' : '✗ Проверка не пройдена';
+        const failedAccounts = (data.invalidAccounts && data.invalidAccounts.length) ? `\nПроблемные счета: ${data.invalidAccounts.join(', ')}` : '';
+        resultEl.textContent = `Запрос:\n${data.request || '(недоступен)'}\n\nHTTP статус: ${data.httpStatus}\nРезультат: ${verdict}${failedAccounts}\nПоле status: ${data.parsedStatus || '(не найдено)'}\nКлючи JSON: ${data.jsonKeys ? data.jsonKeys.join(', ') : '(не JSON)'}\n\nТело ответа:\n${data.body || '(пусто)'}`;
       } catch (e) {
         resultEl.style.background = '#fff5f5';
         resultEl.style.border = '1px solid #fc8181';
@@ -5000,7 +5003,9 @@
           resultEl.style.border = '1px solid #fc8181';
           resultEl.style.color = '#c53030';
         }
-        resultEl.textContent = `Запрос:\n${data.request || '(недоступен)'}\n\nHTTP статус: ${data.httpStatus}\nПоле status: ${data.parsedStatus || '(не найдено)'}\nКлючи JSON: ${data.jsonKeys ? data.jsonKeys.join(', ') : '(не JSON)'}\n\nТело ответа:\n${data.body || '(пусто)'}`;
+        const verdict = data.success ? '✓ Проверка пройдена' : '✗ Проверка не пройдена';
+        const failedAccounts = (data.invalidAccounts && data.invalidAccounts.length) ? `\nПроблемные счета: ${data.invalidAccounts.join(', ')}` : '';
+        resultEl.textContent = `Запрос:\n${data.request || '(недоступен)'}\n\nHTTP статус: ${data.httpStatus}\nРезультат: ${verdict}${failedAccounts}\nПоле status: ${data.parsedStatus || '(не найдено)'}\nКлючи JSON: ${data.jsonKeys ? data.jsonKeys.join(', ') : '(не JSON)'}\n\nТело ответа:\n${data.body || '(пусто)'}`;
       } catch (e) {
         resultEl.style.background = '#fff5f5';
         resultEl.style.border = '1px solid #fc8181';

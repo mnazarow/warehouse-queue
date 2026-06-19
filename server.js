@@ -1205,7 +1205,7 @@ app.post('/api/manager/settings/1c/test-order-validation', requireManager, async
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
   const body = JSON.stringify({ invoce_number: accounts });
-  const maskedAuth = `${username}:${password}`;
+  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + password + ')';
   const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${validationUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
@@ -1278,7 +1278,7 @@ app.post('/api/manager/settings/1c/test-payment-check', requireManager, async (r
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
   const body = JSON.stringify({ invoce_number: accounts });
-  const maskedAuth = `${username}:${password}`;
+  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + password + ')';
   const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${paymentCheckUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
@@ -1344,7 +1344,7 @@ app.post('/api/manager/settings/1c/test-ready-check', requireManager, async (req
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
   const body = JSON.stringify({ invoce_number: accounts });
-  const maskedAuth = `${username}:${password}`;
+  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + password + ')';
   const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${readyCheckUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
