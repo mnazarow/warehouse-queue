@@ -282,6 +282,16 @@ fn app_offset_secs(db: &mut Db) -> i32 {
         * 3600
 }
 
+// minutes_between возвращает (end - start) в минутах, либо None при пустых/неразобранных.
+fn minutes_between(start: &str, end: &str) -> Option<i64> {
+    if start.is_empty() || end.is_empty() {
+        return None;
+    }
+    let ps = NaiveDateTime::parse_from_str(start, "%Y-%m-%d %H:%M:%S").ok()?;
+    let pe = NaiveDateTime::parse_from_str(end, "%Y-%m-%d %H:%M:%S").ok()?;
+    Some((pe - ps).num_minutes())
+}
+
 // Слот задаётся как местное время склада; возвращаем абсолютный момент в UTC.
 fn slot_dt(date: &str, time: &str, offset_secs: i32) -> Option<chrono::DateTime<Utc>> {
     let nd = NaiveDateTime::parse_from_str(&format!("{date} {time}"), "%Y-%m-%d %H:%M").ok()?;
@@ -1372,6 +1382,57 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
     }
     if p == "/api/manager/stats/devices" && m == "GET" {
         return h_devices(db);
+    }
+    if p == "/api/manager/stats/orders" && m == "GET" {
+        let from = q(ctx, "from");
+        let to = q(ctx, "to");
+        if from.is_empty() || to.is_empty() {
+            return Resp::err(400, "from and to are required");
+        }
+        let rows = db.query_maps("SELECT s.date, s.time_start, s.type, s.customer_name, s.customer_account, s.customer_organization, s.booked_at, s.assembling_at, s.completed_at, w.name AS warehouse_name FROM slots s LEFT JOIN warehouses w ON w.id=s.warehouse_id WHERE s.booked_at IS NOT NULL AND substr(s.booked_at,1,10) >= ? AND substr(s.booked_at,1,10) <= ? ORDER BY s.booked_at DESC", &[json!(from), json!(to)]);
+        let (mut hc, mut ht, mut rc, mut rt) = (0i64, 0i64, 0i64, 0i64);
+        let mut orders = vec![];
+        for m in rows {
+            let ba = m.get("booked_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let aa = m.get("assembling_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let ca = m.get("completed_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let dh = minutes_between(&ba, &aa);
+            let dr = minutes_between(&ba, &ca);
+            let mut mm = m.clone();
+            match dh {
+                Some(v) => {
+                    if v >= 0 {
+                        hc += 1;
+                        ht += v;
+                    }
+                    mm.insert("durToHandoff".into(), json!(v));
+                }
+                None => {
+                    mm.insert("durToHandoff".into(), Value::Null);
+                }
+            }
+            match dr {
+                Some(v) => {
+                    if v >= 0 {
+                        rc += 1;
+                        rt += v;
+                    }
+                    mm.insert("durToReady".into(), json!(v));
+                }
+                None => {
+                    mm.insert("durToReady".into(), Value::Null);
+                }
+            }
+            orders.push(Value::Object(mm));
+        }
+        let total = orders.len();
+        let havg = if hc > 0 { ht / hc } else { 0 };
+        let ravg = if rc > 0 { rt / rc } else { 0 };
+        return Resp::json(200, json!({
+            "orders": orders, "total": total,
+            "handoff": {"count": hc, "totalMin": ht, "avg": havg},
+            "ready": {"count": rc, "totalMin": rt, "avg": ravg}
+        }));
     }
     if p == "/api/manager/drivers" && m == "GET" {
         let drivers = db.query_maps("SELECT customer_name AS name, customer_phone AS phone, COUNT(*) AS trips, MAX(date) AS last_date FROM slots WHERE is_booked=1 AND customer_phone IS NOT NULL AND customer_phone <> '' GROUP BY customer_phone, customer_name ORDER BY trips DESC, last_date DESC", &[]);

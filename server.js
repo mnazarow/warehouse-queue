@@ -1830,6 +1830,44 @@ app.get('/api/manager/stats/storekeepers', requireManager, async (req, res) => {
   res.json(response);
 });
 
+// Время обработки заказа: от подачи (booked_at) до передачи кладовщику
+// (assembling_at) и до готовности (completed_at). Период фильтруется по дате подачи.
+app.get('/api/manager/stats/orders', requireManager, async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) {
+    return res.status(400).json({ error: 'from and to are required' });
+  }
+  const cacheKey = 'stats-orders:' + from + ':' + to;
+  const cached = await redisGet(cacheKey);
+  if (cached) return res.json(JSON.parse(cached));
+  const rows = db.prepare(`
+    SELECT s.date, s.time_start, s.type, s.customer_name, s.customer_account, s.customer_organization,
+           s.booked_at, s.assembling_at, s.completed_at, w.name AS warehouse_name
+    FROM slots s LEFT JOIN warehouses w ON w.id = s.warehouse_id
+    WHERE s.booked_at IS NOT NULL AND substr(s.booked_at, 1, 10) >= ? AND substr(s.booked_at, 1, 10) <= ?
+    ORDER BY s.booked_at DESC
+  `).all(from, to);
+  const diffMin = (start, end) => (start && end)
+    ? Math.round((new Date(String(end).replace(' ', 'T')) - new Date(String(start).replace(' ', 'T'))) / 60000)
+    : null;
+  let hCount = 0, hTotal = 0, rCount = 0, rTotal = 0;
+  const orders = rows.map(o => {
+    const durToHandoff = diffMin(o.booked_at, o.assembling_at);
+    const durToReady = diffMin(o.booked_at, o.completed_at);
+    if (durToHandoff !== null && durToHandoff >= 0) { hCount++; hTotal += durToHandoff; }
+    if (durToReady !== null && durToReady >= 0) { rCount++; rTotal += durToReady; }
+    return { ...o, durToHandoff, durToReady };
+  });
+  const response = {
+    orders,
+    total: orders.length,
+    handoff: { count: hCount, totalMin: hTotal, avg: hCount ? Math.round(hTotal / hCount) : 0 },
+    ready: { count: rCount, totalMin: rTotal, avg: rCount ? Math.round(rTotal / rCount) : 0 }
+  };
+  redisSet(cacheKey, JSON.stringify(response), 30);
+  res.json(response);
+});
+
 /* ---------- Storekeeper CRUD ---------- */
 
 app.get('/api/manager/storekeepers', requireManager, async (req, res) => {

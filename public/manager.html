@@ -402,7 +402,7 @@
       <button class="tab-link" data-tab="managers" onclick="switchTab('managers')">Менеджеры</button>
       <button class="tab-link" data-tab="stats" onclick="switchTab('stats')">Статистика</button>
       <button class="tab-link" data-tab="storekeepers" onclick="switchTab('storekeepers')">Кладовщики</button>
-      <button class="tab-link" data-tab="skstats" onclick="switchTab('skstats')">Статистика кладовщиков</button>
+      <button class="tab-link" data-tab="skstats" onclick="switchTab('skstats')">Статистика сотрудников склада</button>
 
       <button class="tab-link" data-tab="warehouses" onclick="switchTab('warehouses')">Склады</button>
       <button class="tab-link" data-tab="nomenclature" onclick="switchTab('nomenclature')">Номенклатура</button>
@@ -515,6 +515,8 @@
       <div id="skstatsContainer">
         <p class="no-slots">Выберите период</p>
       </div>
+      <div id="mgrStatsContainer" style="margin-top:24px"></div>
+      <div id="ordStatsContainer" style="margin-top:24px"></div>
     </div>
 
     <div id="tabWarehouses" class="tab-content">
@@ -2026,12 +2028,15 @@
     async function confirmAssign() {
       const select = document.getElementById('assignStorekeeperSelect');
       const storekeeperId = select.value;
+      // Сохраняем значения до closeAssignModal(), который обнуляет assignSlotId и
+      // assembleAfterAssign — иначе шаг «на сборку» не выполнялся.
+      const slotId = assignSlotId;
+      const doAssemble = assembleAfterAssign;
       try {
-        await takeSlot(assignSlotId, storekeeperId ? Number(storekeeperId) : null);
+        await takeSlot(slotId, storekeeperId ? Number(storekeeperId) : null);
         closeAssignModal();
-        if (assembleAfterAssign) {
-          assembleAfterAssign = false;
-          await assembleSlot(assignSlotId);
+        if (doAssemble) {
+          await assembleSlot(slotId);
         }
       } catch (e) {
         alert('Ошибка сети');
@@ -2974,6 +2979,7 @@
     async function loadSkStats() {
       const container = document.getElementById('skstatsContainer');
       container.innerHTML = '<p class="no-slots">Загрузка...</p>';
+      loadOrderTimings();
       const period = document.getElementById('skstatsPeriod').value;
       const { from, to } = getPeriodDates(period);
       try {
@@ -2988,7 +2994,7 @@
           container.innerHTML = '<div class="empty-state">Нет данных за выбранный период</div>';
           return;
         }
-        let html = `<h3 style="margin:0 0 16px 0;color:#4a5568">Статистика кладовщиков за ${periodLabel(period).toLowerCase()} (${from} – ${to})</h3>`;
+        let html = `<h3 style="margin:0 0 16px 0;color:#4a5568">Статистика сотрудников склада за ${periodLabel(period).toLowerCase()} (${from} – ${to})</h3>`;
         const whList = data.byWarehouse || [];
         if (!whList.length) {
           for (const s of data.stats) {
@@ -3034,6 +3040,71 @@
         container.innerHTML = html;
       } catch (e) {
         container.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
+      }
+    }
+
+    function fmtMin(m) {
+      if (m === null || m === undefined) return '<span style="color:#a0aec0">в работе</span>';
+      return m >= 60 ? `${Math.floor(m / 60)}ч ${m % 60}м` : `${m}м`;
+    }
+
+    function renderTimingTable(title, subtitle, orders, durKey, summary) {
+      let html = `<h3 style="margin:0 0 6px;color:#4a5568">${title}</h3>`;
+      html += `<div style="font-size:0.82rem;color:#718096;margin-bottom:10px">${subtitle}</div>`;
+      html += `<div style="font-size:0.85rem;color:#4a5568;margin-bottom:10px">Заказов: <strong>${summary.count}</strong> · Среднее время: <strong>${summary.avg ? fmtMin(summary.avg) : '—'}</strong> · Общее: <strong>${summary.totalMin ? fmtMin(summary.totalMin) : '—'}</strong></div>`;
+      html += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">`;
+      html += `<thead><tr style="background:#f7fafc">
+        <th style="text-align:left;padding:6px 8px">Заказ</th>
+        <th style="text-align:left;padding:6px 8px">Клиент</th>
+        <th style="text-align:left;padding:6px 8px">Счёт</th>
+        <th style="text-align:left;padding:6px 8px">Склад</th>
+        <th style="text-align:left;padding:6px 8px">Подача</th>
+        <th style="text-align:left;padding:6px 8px">${durKey === 'durToReady' ? 'Готовность' : 'Передача кладовщику'}</th>
+        <th style="text-align:left;padding:6px 8px">Время</th>
+      </tr></thead><tbody>`;
+      for (const o of orders) {
+        const endTs = durKey === 'durToReady' ? o.completed_at : o.assembling_at;
+        html += `<tr style="border-top:1px solid #edf2f7">
+          <td style="padding:6px 8px">${escapeHtml(o.date || '')} ${escapeHtml(o.time_start || '')}</td>
+          <td style="padding:6px 8px">${escapeHtml(o.customer_name || '')}</td>
+          <td style="padding:6px 8px">${escapeHtml(o.customer_account || '')}</td>
+          <td style="padding:6px 8px">${escapeHtml(o.warehouse_name || '')}</td>
+          <td style="padding:6px 8px">${escapeHtml(o.booked_at || '')}</td>
+          <td style="padding:6px 8px">${escapeHtml(endTs || '—')}</td>
+          <td style="padding:6px 8px;font-weight:600">${fmtMin(o[durKey])}</td>
+        </tr>`;
+      }
+      html += `</tbody></table></div>`;
+      return html;
+    }
+
+    async function loadOrderTimings() {
+      const mgrEl = document.getElementById('mgrStatsContainer');
+      const ordEl = document.getElementById('ordStatsContainer');
+      if (!mgrEl || !ordEl) return;
+      const period = document.getElementById('skstatsPeriod').value;
+      const { from, to } = getPeriodDates(period);
+      try {
+        const res = await fetch(`/api/manager/stats/orders?from=${from}&to=${to}`, { credentials: 'include' });
+        if (res.status === 401) return;
+        const data = await res.json();
+        const orders = data.orders || [];
+        if (!orders.length) {
+          mgrEl.innerHTML = '<h3 style="margin:0 0 10px;color:#4a5568">Статистика менеджеров</h3><div class="empty-state">Нет заказов за выбранный период</div>';
+          ordEl.innerHTML = '<h3 style="margin:0 0 10px;color:#4a5568">Статистика по обработке заказов</h3><div class="empty-state">Нет заказов за выбранный период</div>';
+          return;
+        }
+        mgrEl.innerHTML = renderTimingTable(
+          'Статистика менеджеров',
+          'Время по каждому заказу с момента подачи до передачи кладовщику',
+          orders, 'durToHandoff', data.handoff || { count: 0, avg: 0, totalMin: 0 });
+        ordEl.innerHTML = renderTimingTable(
+          'Статистика по обработке заказов',
+          'Время по каждому заказу с момента подачи до момента готовности',
+          orders, 'durToReady', data.ready || { count: 0, avg: 0, totalMin: 0 });
+      } catch (e) {
+        mgrEl.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
+        ordEl.innerHTML = '';
       }
     }
 

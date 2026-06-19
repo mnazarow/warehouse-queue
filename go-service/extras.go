@@ -155,6 +155,8 @@ func extrasRouter(w http.ResponseWriter, r *http.Request, p, m string, seg []str
 		hTimeseries(w, r)
 	case p == "/api/manager/stats/devices" && m == "GET":
 		hDevices(w, r)
+	case p == "/api/manager/stats/orders" && m == "GET":
+		hOrderTimings(w, r)
 
 	// ---- backups ----
 	case p == "/api/manager/backup" && m == "GET":
@@ -448,6 +450,81 @@ func hDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	total := cat["desktop"] + cat["mobile"] + cat["tablet"] + cat["other"]
 	writeJSON(w, 200, map[string]any{"total": total, "categories": cat, "os": group("os"), "browser": group("browser")})
+}
+
+// strVal — безопасное приведение значения столбца к строке.
+func strVal(v any) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// minutesBetween возвращает (end - start) в минутах, либо nil, если что-то пусто/не разобрано.
+func minutesBetween(start, end string) *int {
+	if start == "" || end == "" {
+		return nil
+	}
+	ls, e1 := time.Parse("2006-01-02 15:04:05", start)
+	le, e2 := time.Parse("2006-01-02 15:04:05", end)
+	if e1 != nil || e2 != nil {
+		return nil
+	}
+	m := int(le.Sub(ls).Minutes())
+	return &m
+}
+
+// hOrderTimings — время от подачи заказа до передачи кладовщику и до готовности.
+func hOrderTimings(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireManager(w, r); !ok {
+		return
+	}
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+	if from == "" || to == "" {
+		writeJSON(w, 400, map[string]any{"error": "from and to are required"})
+		return
+	}
+	rows, _ := queryMaps("SELECT s.date, s.time_start, s.type, s.customer_name, s.customer_account, s.customer_organization, s.booked_at, s.assembling_at, s.completed_at, w.name AS warehouse_name FROM slots s LEFT JOIN warehouses w ON w.id=s.warehouse_id WHERE s.booked_at IS NOT NULL AND substr(s.booked_at,1,10) >= ? AND substr(s.booked_at,1,10) <= ? ORDER BY s.booked_at DESC", from, to)
+	hCount, hTotal, rCount, rTotal := 0, 0, 0, 0
+	orders := []map[string]any{}
+	for _, o := range rows {
+		ba := strVal(o["booked_at"])
+		dh := minutesBetween(ba, strVal(o["assembling_at"]))
+		dr := minutesBetween(ba, strVal(o["completed_at"]))
+		if dh != nil {
+			if *dh >= 0 {
+				hCount++
+				hTotal += *dh
+			}
+			o["durToHandoff"] = *dh
+		} else {
+			o["durToHandoff"] = nil
+		}
+		if dr != nil {
+			if *dr >= 0 {
+				rCount++
+				rTotal += *dr
+			}
+			o["durToReady"] = *dr
+		} else {
+			o["durToReady"] = nil
+		}
+		orders = append(orders, o)
+	}
+	havg, ravg := 0, 0
+	if hCount > 0 {
+		havg = hTotal / hCount
+	}
+	if rCount > 0 {
+		ravg = rTotal / rCount
+	}
+	writeJSON(w, 200, map[string]any{
+		"orders":  orders,
+		"total":   len(orders),
+		"handoff": map[string]any{"count": hCount, "totalMin": hTotal, "avg": havg},
+		"ready":   map[string]any{"count": rCount, "totalMin": rTotal, "avg": ravg},
+	})
 }
 
 func toInt(v any) int {
