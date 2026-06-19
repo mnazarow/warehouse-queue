@@ -1124,6 +1124,12 @@ app.post('/api/manager/settings/1c/credentials', requireManager, (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/manager/settings/1c/password', requireManager, (req, res) => {
+  const { password } = req.body;
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('1c_password', ?)").run(password || '');
+  res.json({ success: true });
+});
+
 app.post('/api/manager/settings/1c/order-validation-url', requireManager, (req, res) => {
   const { orderValidationUrl } = req.body;
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('1c_order_validation_url', ?)").run(orderValidationUrl || '');

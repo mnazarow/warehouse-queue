@@ -1,0 +1,48 @@
+name: Go build
+
+# Compiles and vets the Go variant (go-service) on GitHub's runners, which have
+# Go and network access. Use the Actions tab to see compile errors.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'go-service/**'
+      - '.github/workflows/go-build.yml'
+  pull_request:
+    paths:
+      - 'go-service/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Resolve dependencies (writes go.sum)
+        run: go mod tidy
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Commit go.sum if generated
+        if: github.event_name == 'push'
+        run: |
+          if [ -n "$(git status --porcelain go.sum go.mod)" ]; then
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add go.sum go.mod
+            git commit -m "ci: update go.mod/go.sum" || true
+            git push || true
+          fi

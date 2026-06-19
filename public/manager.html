@@ -880,7 +880,8 @@
         <div class="form-group" style="margin-top:12px">
           <label>Пароль 1С</label>
           <div style="display:flex;gap:8px">
-            <input type="password" id="c1Password" placeholder="••••••" style="font-family:monospace;width:100%">
+            <input type="text" id="c1Password" placeholder="Пароль" style="font-family:monospace;width:100%" oninput="updateC1OrderValidationExample();updateC1PaymentCheckExample()">
+            <button class="btn btn-primary" onclick="saveC1Password()" style="white-space:nowrap">Сохранить</button>
           </div>
         </div>
 
@@ -4796,6 +4797,7 @@
     function updateC1OrderValidationExample() {
       const url = document.getElementById('c1OrderValidationUrl').value.trim();
       const username = document.getElementById('c1Username').value.trim();
+      const password = document.getElementById('c1Password').value;
       const urlEl = document.getElementById('c1OrderValidationExampleUrl');
       const authEl = document.getElementById('c1OrderValidationExampleAuth');
       if (!url) {
@@ -4808,11 +4810,7 @@
       const separator = url.includes('?') ? '&' : '?';
       urlEl.textContent = `POST ${url}${separator}`;
       urlEl.style.color = '#2d3748';
-      if (username) {
-        authEl.innerHTML = `Authorization: Basic ${username}:XXXX<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
-      } else {
-        authEl.innerHTML = `Authorization: Basic :XXXX<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
-      }
+      authEl.innerHTML = `Authorization: Basic ${username}:${password}<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
     }
 
     async function saveC1PaymentCheckUrl() {
@@ -4842,6 +4840,7 @@
     function updateC1PaymentCheckExample() {
       const url = document.getElementById('c1PaymentCheckUrl').value.trim();
       const username = document.getElementById('c1Username').value.trim();
+      const password = document.getElementById('c1Password').value;
       const urlEl = document.getElementById('c1PaymentCheckExampleUrl');
       const authEl = document.getElementById('c1PaymentCheckExampleAuth');
       if (!url) {
@@ -4853,11 +4852,7 @@
       urlEl.style.color = '#2d3748';
       const separator = url.includes('?') ? '&' : '?';
       urlEl.textContent = `POST ${url}${separator}`;
-      if (username) {
-        authEl.innerHTML = `Authorization: Basic ${username}:XXXX<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
-      } else {
-        authEl.innerHTML = `Authorization: Basic :XXXX<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
-      }
+      authEl.innerHTML = `Authorization: Basic ${username}:${password}<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
     }
 
     async function saveC1Notes() {
@@ -5051,6 +5046,31 @@
         const status = document.getElementById('c1Status');
         if (data.success) {
           status.textContent = 'Данные сохранены';
+          status.style.color = '#38a169';
+        } else {
+          status.textContent = data.error || 'Ошибка';
+          status.style.color = '#e53e3e';
+        }
+        status.style.display = 'block';
+        setTimeout(() => status.style.display = 'none', 3000);
+      } catch { alert('Ошибка сети'); }
+      updateC1OrderValidationExample();
+      updateC1PaymentCheckExample();
+    }
+
+    async function saveC1Password() {
+      const password = document.getElementById('c1Password').value;
+      try {
+        const res = await fetch('/api/manager/settings/1c/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ password })
+        });
+        const data = await res.json();
+        const status = document.getElementById('c1Status');
+        if (data.success) {
+          status.textContent = 'Пароль 1С сохранён';
           status.style.color = '#38a169';
         } else {
           status.textContent = data.error || 'Ошибка';
