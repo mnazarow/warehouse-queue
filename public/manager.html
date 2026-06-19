@@ -818,6 +818,12 @@
             <span>Работаем в выходные дни (сб, вс)</span>
           </label>
         </div>
+        <div class="form-group" style="margin-bottom:16px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
+            <input type="checkbox" id="settingsMascot" style="width:18px;height:18px;cursor:pointer" onchange="saveSettingsMascot()">
+            <span>Включить маскота на странице записи</span>
+          </label>
+        </div>
 
         <div class="section-header" style="margin-top:24px">
           <h2>SMS уведомления</h2>
@@ -2511,6 +2517,10 @@
         const weekendData = await weekendRes.json();
         document.getElementById('settingsWorkWeekends').checked = weekendData.enabled;
 
+        const mascotRes = await fetch('/api/manager/settings/mascot', { credentials: 'include' });
+        const mascotData = await mascotRes.json();
+        document.getElementById('settingsMascot').checked = mascotData.enabled;
+
         const smsRes = await fetch('/api/manager/settings/smsru', { credentials: 'include' });
         const smsData = await smsRes.json();
         document.getElementById('smsruApiKey').value = smsData.apiKey || '';
@@ -2557,6 +2567,16 @@
       const enabled = document.getElementById('settingsWorkWeekends').checked;
       try {
         await fetch('/api/manager/settings/work-on-weekends', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', body: JSON.stringify({ enabled })
+        });
+      } catch {}
+    }
+
+    async function saveSettingsMascot() {
+      const enabled = document.getElementById('settingsMascot').checked;
+      try {
+        await fetch('/api/manager/settings/mascot', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           credentials: 'include', body: JSON.stringify({ enabled })
         });

@@ -2739,6 +2739,23 @@ app.get('/api/public/cookie-policy', (req, res) => {
   res.json({ text: row ? row.value : '' });
 });
 
+app.get('/api/public/settings/mascot', (req, res) => {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'mascot_enabled'").get();
+  res.json({ enabled: row ? row.value === '1' : true });
+});
+
+app.get('/api/manager/settings/mascot', requireManager, (req, res) => {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'mascot_enabled'").get();
+  res.json({ enabled: row ? row.value === '1' : true });
+});
+
+app.post('/api/manager/settings/mascot', requireManager, (req, res) => {
+  const { enabled } = req.body;
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('mascot_enabled', ?)").run(enabled ? '1' : '0');
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', (enabled ? 'Включил' : 'Выключил') + ' маскота', 0, getIp(req), getUserAgent(req));
+  res.json({ success: true });
+});
+
 app.get('/api/manager/settings/cookie-policy', requireManager, (req, res) => {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'cookie_policy_text'").get();
   res.json({ text: row ? row.value : '' });
