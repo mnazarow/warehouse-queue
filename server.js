@@ -282,9 +282,27 @@ var BACKUP_DIR = process.env.BACKUP_DIR || path.join(process.env.DB_PATH ? path.
 var AUTOBACKUP_INTERVALS = [3600, 7200, 14400, 86400, 604800]; // 1h, 2h, 4h, 1d, 1w
 var autobackupTimer = null;
 
+// Ensure the page_visits table exists in the active backend (covers PG DBs that
+// were migrated before this table was added to the schema).
+function ensurePageVisitsTable() {
+  try {
+    if (dbAdapter.getType() === 'postgresql') {
+      db.exec("CREATE TABLE IF NOT EXISTS page_visits (id SERIAL PRIMARY KEY, visited_at TEXT NOT NULL, ip TEXT DEFAULT '', device TEXT DEFAULT '', os TEXT DEFAULT '', browser TEXT DEFAULT '')");
+      ['device', 'os', 'browser'].forEach(function(c) { try { db.exec("ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS " + c + " TEXT DEFAULT ''"); } catch (e) {} });
+    } else {
+      db.exec("CREATE TABLE IF NOT EXISTS page_visits (id INTEGER PRIMARY KEY AUTOINCREMENT, visited_at TEXT NOT NULL, ip TEXT DEFAULT '', device TEXT DEFAULT '', os TEXT DEFAULT '', browser TEXT DEFAULT '')");
+      try {
+        const cols = sqliteDb.prepare("PRAGMA table_info('page_visits')").all().map(c => c.name);
+        ['device', 'os', 'browser'].forEach(function(c) { if (cols.indexOf(c) === -1) sqliteDb.exec("ALTER TABLE page_visits ADD COLUMN " + c + " TEXT DEFAULT ''"); });
+      } catch (e) {}
+    }
+  } catch (e) { console.error('ensurePageVisitsTable:', e.message); }
+}
+
 loadTtlOverrides();
 initRedis();
 scheduleAutobackup();
+ensurePageVisitsTable();
 
 function getIp(req) {
   return req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : req.connection.remoteAddress || '';
@@ -2317,6 +2335,126 @@ app.get('/api/manager/check-update', requireManager, async (req, res) => {
     });
   } catch (e) {
     res.json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Analytics: page-visit logging + time-series aggregation (visits / bookings)
+// ---------------------------------------------------------------------------
+function detectDevice(ua) {
+  if (!ua) return 'unknown';
+  if (/bot|crawl|spider|slurp|bingpreview|facebookexternalhit/i.test(ua)) return 'bot';
+  if (/iPad|Tablet|PlayBook|Silk|(Android(?!.*Mobile))/i.test(ua)) return 'tablet';
+  if (/Mobi|iPhone|iPod|Android|Windows Phone|Opera Mini|IEMobile|BlackBerry/i.test(ua)) return 'mobile';
+  return 'desktop';
+}
+function detectOS(ua) {
+  if (!ua) return '';
+  if (/Windows Phone/i.test(ua)) return 'Windows Phone';
+  if (/Windows NT/i.test(ua)) return 'Windows';
+  if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
+  if (/Android/i.test(ua)) return 'Android';
+  if (/Mac OS X|Macintosh/i.test(ua)) return 'macOS';
+  if (/Linux/i.test(ua)) return 'Linux';
+  return 'Прочее';
+}
+function detectBrowser(ua) {
+  if (!ua) return '';
+  if (/Edg(e|A|iOS)?\//i.test(ua)) return 'Edge';
+  if (/OPR\/|Opera/i.test(ua)) return 'Opera';
+  if (/YaBrowser/i.test(ua)) return 'Yandex';
+  if (/Firefox\/|FxiOS/i.test(ua)) return 'Firefox';
+  if (/Chrome\/|CriOS/i.test(ua)) return 'Chrome';
+  if (/Safari\//i.test(ua)) return 'Safari';
+  return 'Прочее';
+}
+
+app.post('/api/visit', (req, res) => {
+  try {
+    const ua = getUserAgent(req);
+    db.prepare('INSERT INTO page_visits (visited_at, ip, device, os, browser) VALUES (?, ?, ?, ?, ?)')
+      .run(new Date().toISOString(), getIp(req), detectDevice(ua), detectOS(ua), detectBrowser(ua));
+  } catch (e) {}
+  res.json({ ok: true });
+});
+
+app.get('/api/manager/stats/devices', requireManager, (req, res) => {
+  try {
+    const cat = { desktop: 0, mobile: 0, tablet: 0, other: 0 };
+    for (const r of db.prepare("SELECT device AS k, COUNT(*) AS cnt FROM page_visits GROUP BY device").all()) {
+      const c = Number(r.cnt) || 0;
+      if (r.k === 'desktop' || r.k === 'mobile' || r.k === 'tablet') cat[r.k] += c; else cat.other += c;
+    }
+    const groupList = (col) => {
+      const m = {};
+      for (const r of db.prepare("SELECT " + col + " AS k, COUNT(*) AS cnt FROM page_visits GROUP BY " + col).all()) {
+        const name = (r.k && String(r.k).trim()) ? String(r.k) : 'Прочее';
+        m[name] = (m[name] || 0) + (Number(r.cnt) || 0);
+      }
+      return Object.keys(m).map(k => ({ name: k, count: m[k] })).sort((a, b) => b.count - a.count);
+    };
+    const total = cat.desktop + cat.mobile + cat.tablet + cat.other;
+    res.json({ total: total, categories: cat, os: groupList('os'), browser: groupList('browser') });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+function parseTs(ts) {
+  if (!ts) return NaN;
+  const s = String(ts);
+  // Normalize 'YYYY-MM-DD HH:MM:SS' (sqlite UTC) to ISO; ISO strings pass through.
+  return Date.parse(s.indexOf('T') !== -1 ? s : (s.replace(' ', 'T') + 'Z'));
+}
+function makeBuckets(interval) {
+  const now = new Date();
+  const b = [];
+  const push = (start, end, label) => b.push({ start: start.getTime(), end: end.getTime(), label: label, count: 0 });
+  if (interval === 'minute') {
+    const base = new Date(now); base.setSeconds(0, 0);
+    for (let i = 59; i >= 0; i--) { const s = new Date(base.getTime() - i * 60000); push(s, new Date(s.getTime() + 60000), pad2(s.getHours()) + ':' + pad2(s.getMinutes())); }
+  } else if (interval === 'hour') {
+    const base = new Date(now); base.setMinutes(0, 0, 0);
+    for (let i = 23; i >= 0; i--) { const s = new Date(base.getTime() - i * 3600000); push(s, new Date(s.getTime() + 3600000), pad2(s.getHours()) + ':00'); }
+  } else if (interval === 'week') {
+    const base = new Date(now); base.setHours(0, 0, 0, 0); base.setDate(base.getDate() - ((base.getDay() + 6) % 7));
+    for (let i = 11; i >= 0; i--) { const s = new Date(base.getTime() - i * 7 * 86400000); push(s, new Date(s.getTime() + 7 * 86400000), pad2(s.getDate()) + '.' + pad2(s.getMonth() + 1)); }
+  } else if (interval === 'year') {
+    const y = now.getFullYear();
+    for (let i = 5; i >= 0; i--) { const s = new Date(y - i, 0, 1); push(s, new Date(y - i + 1, 0, 1), String(y - i)); }
+  } else { // day
+    const base = new Date(now); base.setHours(0, 0, 0, 0);
+    for (let i = 29; i >= 0; i--) { const s = new Date(base.getTime() - i * 86400000); push(s, new Date(s.getTime() + 86400000), pad2(s.getDate()) + '.' + pad2(s.getMonth() + 1)); }
+  }
+  return b;
+}
+function countInto(buckets, timestamps) {
+  if (!buckets.length) return;
+  const first = buckets[0].start, last = buckets[buckets.length - 1].end;
+  for (const ts of timestamps) {
+    const t = parseTs(ts);
+    if (isNaN(t) || t < first || t >= last) continue;
+    for (const bk of buckets) { if (t >= bk.start && t < bk.end) { bk.count++; break; } }
+  }
+}
+
+app.get('/api/manager/stats/timeseries', requireManager, (req, res) => {
+  const interval = ['minute', 'hour', 'day', 'week', 'year'].indexOf(req.query.interval) !== -1 ? req.query.interval : 'day';
+  const metric = req.query.metric === 'bookings' ? 'bookings' : 'visits';
+  try {
+    const buckets = makeBuckets(interval);
+    let timestamps = [];
+    if (metric === 'visits') {
+      const since = new Date(buckets[0].start).toISOString();
+      timestamps = db.prepare('SELECT visited_at FROM page_visits WHERE visited_at >= ?').all(since).map(r => r.visited_at);
+    } else {
+      timestamps = db.prepare("SELECT booked_at FROM slots WHERE booked_at IS NOT NULL").all().map(r => r.booked_at);
+    }
+    countInto(buckets, timestamps);
+    res.json({ interval: interval, metric: metric, labels: buckets.map(b => b.label), counts: buckets.map(b => b.count) });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
   }
 });
 

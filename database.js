@@ -162,6 +162,17 @@ function initDatabase() {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS page_visits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      visited_at TEXT NOT NULL,
+      ip TEXT DEFAULT '',
+      device TEXT DEFAULT '',
+      os TEXT DEFAULT '',
+      browser TEXT DEFAULT ''
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       slot_id INTEGER NOT NULL,

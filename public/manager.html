@@ -719,6 +719,36 @@
       </div>
 
       <div class="section-header">
+        <h2>Аналитика</h2>
+      </div>
+      <div style="max-width:760px;margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+          <span style="font-weight:600;font-size:0.9rem">Посещения страницы записи</span>
+          <select id="visitsInterval" onchange="loadAnalytics('visits')">
+            <option value="minute">По минутам (час)</option>
+            <option value="hour">По часам (сутки)</option>
+            <option value="day" selected>По дням (месяц)</option>
+            <option value="week">По неделям (12 нед.)</option>
+            <option value="year">По годам</option>
+          </select>
+        </div>
+        <div id="visitsChart" style="font-size:0.85rem;color:#718096">—</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:16px 0 6px">
+          <span style="font-weight:600;font-size:0.9rem">Бронирования</span>
+          <select id="bookingsInterval" onchange="loadAnalytics('bookings')">
+            <option value="minute">По минутам (час)</option>
+            <option value="hour">По часам (сутки)</option>
+            <option value="day" selected>По дням (месяц)</option>
+            <option value="week">По неделям (12 нед.)</option>
+            <option value="year">По годам</option>
+          </select>
+        </div>
+        <div id="bookingsChart" style="font-size:0.85rem;color:#718096">—</div>
+        <div style="margin:16px 0 6px;font-weight:600;font-size:0.9rem">Устройства посетителей</div>
+        <div id="devicesChart" style="font-size:0.85rem;color:#718096">—</div>
+      </div>
+
+      <div class="section-header">
         <h2>Резервное копирование БД</h2>
       </div>
       <div style="max-width:600px;margin-bottom:18px">
@@ -2091,7 +2121,7 @@
       if (name === 'bannedphones') loadBannedPhones();
       if (name === 'bannedips') loadBannedIps();
       if (name === 'vehicleclasses') { loadVehicleClasses(); loadLoadTypes(); }
-      if (name === 'settings') { loadAbout(); loadSettings(); loadAutobackup(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
+      if (name === 'settings') { loadAbout(); loadSettings(); loadAutobackup(); loadAnalytics('visits'); loadAnalytics('bookings'); loadDevices(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
     }
 
     let aboutTimer = null;
@@ -2154,6 +2184,71 @@
           } catch {}
         }, 10000);
       } catch {}
+    }
+
+    function renderBarChart(el, labels, counts) {
+      const n = counts.length;
+      if (!n) { el.textContent = 'Нет данных'; return; }
+      const max = Math.max(1, ...counts);
+      const W = 740, H = 190, pad = 26;
+      const bw = (W - pad * 2) / n;
+      const step = n <= 12 ? 1 : Math.ceil(n / 12);
+      let bars = '', lbls = '';
+      for (let i = 0; i < n; i++) {
+        const h = Math.round((counts[i] / max) * (H - pad * 2));
+        const x = pad + i * bw, y = H - pad - h;
+        bars += '<rect x="' + (x + 1).toFixed(1) + '" y="' + y + '" width="' + Math.max(1, bw - 2).toFixed(1) + '" height="' + h + '" fill="#3182ce"><title>' + escapeHtml(labels[i]) + ': ' + counts[i] + '</title></rect>';
+        if (i % step === 0) lbls += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) + '" font-size="9" text-anchor="middle" fill="#888">' + escapeHtml(labels[i]) + '</text>';
+      }
+      el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;background:rgba(0,0,0,0.03);border-radius:6px">'
+        + '<line x1="' + pad + '" y1="' + (H - pad) + '" x2="' + (W - pad) + '" y2="' + (H - pad) + '" stroke="rgba(0,0,0,0.15)"/>'
+        + '<text x="4" y="14" font-size="10" fill="#a0aec0">макс ' + max + ', всего ' + counts.reduce((a, b) => a + b, 0) + '</text>'
+        + bars + lbls + '</svg>';
+    }
+
+    async function loadAnalytics(metric) {
+      const sel = document.getElementById(metric === 'visits' ? 'visitsInterval' : 'bookingsInterval');
+      const el = document.getElementById(metric === 'visits' ? 'visitsChart' : 'bookingsChart');
+      el.textContent = 'Загрузка...';
+      try {
+        const res = await fetch('/api/manager/stats/timeseries?metric=' + metric + '&interval=' + encodeURIComponent(sel.value), { credentials: 'include' });
+        const d = await res.json();
+        if (!res.ok) { el.textContent = 'Ошибка: ' + (d.error || res.status); return; }
+        renderBarChart(el, d.labels || [], d.counts || []);
+      } catch (e) { el.textContent = 'Ошибка: ' + e.message; }
+    }
+
+    async function loadDevices() {
+      const el = document.getElementById('devicesChart');
+      try {
+        const res = await fetch('/api/manager/stats/devices', { credentials: 'include' });
+        const d = await res.json();
+        if (!res.ok) { el.textContent = 'Ошибка'; return; }
+        const total = d.total || 0;
+        if (!total) { el.textContent = 'Нет данных'; return; }
+        const pct = x => Math.round((x / total) * 100);
+        const c = d.categories || {};
+        const seg = (val, color, title) => val ? '<div title="' + title + '" style="width:' + (val / total * 100) + '%;background:' + color + '"></div>' : '';
+        const part = (label, val) => val ? label + ': <b>' + val + '</b> (' + pct(val) + '%)' : '';
+        const parts = [part('ПК', c.desktop), part('Мобильные', c.mobile), part('Планшеты', c.tablet), part('Прочие', c.other)].filter(Boolean).join(' · ');
+        const listHtml = (title, arr) => {
+          if (!arr || !arr.length) return '';
+          const rows = arr.map(x =>
+            '<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0">'
+            + '<span>' + escapeHtml(x.name) + '</span>'
+            + '<span style="color:#718096">' + x.count + ' (' + pct(x.count) + '%)</span></div>'
+          ).join('');
+          return '<div style="flex:1;min-width:180px"><div style="font-weight:600;margin-bottom:4px">' + title + '</div>' + rows + '</div>';
+        };
+        el.innerHTML =
+          '<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;border:1px solid rgba(0,0,0,0.12)">'
+          + seg(c.desktop, '#3182ce', 'ПК') + seg(c.mobile, '#38a169', 'Мобильные') + seg(c.tablet, '#d69e2e', 'Планшеты') + seg(c.other, '#a0aec0', 'Прочие')
+          + '</div>'
+          + '<div style="margin-top:6px">' + parts + '</div>'
+          + '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:12px">'
+          + listHtml('Операционные системы', d.os) + listHtml('Браузеры', d.browser)
+          + '</div>';
+      } catch (e) { el.textContent = 'Ошибка: ' + e.message; }
     }
 
     async function checkUpdate() {

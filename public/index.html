@@ -514,6 +514,7 @@
     loadWarehouses();
     loadAllowNoAccount();
     setInterval(loadSlots, 30000);
+    try { fetch('/api/visit', { method: 'POST' }).catch(function(){}); } catch (e) {}
   </script>
 </body>
 </html>
