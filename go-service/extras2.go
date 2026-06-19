@@ -53,6 +53,24 @@ func extras2Router(w http.ResponseWriter, r *http.Request, p, m string, seg []st
 		}
 		db.setSetting("1c_password", bstr(body(r), "password"))
 		ok200(w)
+
+	// ---- часовой пояс склада ----
+	case p == "/api/manager/settings/timezone" && m == "GET":
+		if _, ok := requireManager(w, r); !ok {
+			return true
+		}
+		writeJSON(w, 200, map[string]any{"offsetHours": appTzOffsetHours()})
+	case p == "/api/manager/settings/timezone" && m == "POST":
+		if _, ok := requireAdmin(w, r); !ok {
+			return true
+		}
+		h := atoiDef(bstr(body(r), "offsetHours"), 3)
+		if h < -12 || h > 14 {
+			writeJSON(w, 400, map[string]any{"error": "Недопустимое смещение (от -12 до 14)"})
+			return true
+		}
+		db.setSetting("tz_offset_hours", strconv.Itoa(h))
+		ok200(w)
 	case p == "/api/manager/settings/1c/allow-booking-without-account" && m == "POST":
 		saveBoolSetting(w, r, "allow_booking_without_account", "allow")
 	case p == "/api/manager/settings/1c/allow-booking-with-invalid-account" && m == "POST":

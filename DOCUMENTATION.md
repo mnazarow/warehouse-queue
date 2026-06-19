@@ -289,6 +289,7 @@ STATIC_DIR=../public PRIVATE_DIR=../private ./target/release/warehouse-rs
 | Переменная | По умолчанию | Назначение |
 |-----------|--------------|-----------|
 | `PORT` | `3000` | Порт сервера |
+| `TZ_OFFSET_HOURS` | `3` | Часовой пояс склада: смещение от UTC (Москва = 3). Влияет на правило «минимум за час» |
 | `DB_PATH` | `./warehouse.db` | Путь к файлу SQLite |
 | `SESSION_SECRET` | (генерится) | Секрет сессий — **задайте свой в проде** |
 | `TRUST_PROXY` | — | `1`/`true`, если за обратным прокси (nginx) |
@@ -307,6 +308,7 @@ STATIC_DIR=../public PRIVATE_DIR=../private ./target/release/warehouse-rs
 | Переменная | По умолчанию | Назначение |
 |-----------|--------------|-----------|
 | `PORT` | `3000` | Порт сервера |
+| `TZ_OFFSET_HOURS` | `3` | Часовой пояс склада: смещение от UTC (Москва = 3). Влияет на правило «минимум за час» |
 | `DB_BACKEND` | `sqlite` | `sqlite` или `postgres` (выбор при старте) |
 | `DB_DSN` | `warehouse.db` | Строка подключения (файл SQLite или `postgres://…`) |
 | `STATIC_DIR` | `../public` | Каталог статики фронтенда |

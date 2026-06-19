@@ -6,7 +6,7 @@
 
 mod db;
 
-use chrono::{Datelike, Duration as CDur, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike, Weekday};
+use chrono::{Datelike, Duration as CDur, FixedOffset, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc, Weekday};
 use db::{to_i64, Db};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -272,9 +272,21 @@ fn is_weekday(date: &str) -> bool {
     }
 }
 
-fn slot_dt(date: &str, time: &str) -> Option<chrono::DateTime<Local>> {
+// Часовой пояс склада (по умолчанию UTC+3, Москва), не зависящий от таймзоны
+// сервера. Настройка: TZ_OFFSET_HOURS.
+// Приоритет: настройка в кабинете (tz_offset_hours) → TZ_OFFSET_HOURS → 3 (Москва).
+fn app_offset_secs(db: &mut Db) -> i32 {
+    db.get_setting("tz_offset_hours", &env("TZ_OFFSET_HOURS", "3"))
+        .parse::<i32>()
+        .unwrap_or(3)
+        * 3600
+}
+
+// Слот задаётся как местное время склада; возвращаем абсолютный момент в UTC.
+fn slot_dt(date: &str, time: &str, offset_secs: i32) -> Option<chrono::DateTime<Utc>> {
     let nd = NaiveDateTime::parse_from_str(&format!("{date} {time}"), "%Y-%m-%d %H:%M").ok()?;
-    Local.from_local_datetime(&nd).single()
+    let off = FixedOffset::east_opt(offset_secs)?;
+    Some(off.from_local_datetime(&nd).single()?.with_timezone(&Utc))
 }
 
 fn ensure_slots(db: &mut Db, date: &str, typ: &str) {
@@ -1530,6 +1542,28 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
         db.set_setting("1c_password", &bstr(&ctx.body, "password"));
         return Resp::ok();
     }
+    if p == "/api/manager/settings/timezone" && m == "GET" {
+        let h = db
+            .get_setting("tz_offset_hours", &env("TZ_OFFSET_HOURS", "3"))
+            .parse::<i64>()
+            .unwrap_or(3);
+        return Resp::json(200, json!({ "offsetHours": h }));
+    }
+    if p == "/api/manager/settings/timezone" && m == "POST" {
+        if !is_admin(db, mid) {
+            return Resp::err(403, "Доступ только для администраторов");
+        }
+        let h = ctx
+            .body
+            .get("offsetHours")
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .unwrap_or(3);
+        if h < -12 || h > 14 {
+            return Resp::err(400, "Недопустимое смещение (от -12 до 14)");
+        }
+        db.set_setting("tz_offset_hours", &h.to_string());
+        return Resp::ok();
+    }
     if p == "/api/manager/settings/1c/allow-booking-without-account" && m == "POST" {
         return save_bool(db, mid, ctx, "allow_booking_without_account", "allow");
     }
@@ -1754,14 +1788,15 @@ fn h_public_slots(db: &mut Db, ctx: &Ctx) -> Resp {
         rows
     };
 
-    let now = Local::now();
+    let offset = app_offset_secs(db);
+    let now = Utc::now();
     let min_t = now + CDur::hours(1); // свободен только если старт >= чем через час
     let max_t = now + CDur::days(14); // и не дальше 2 недель
     let mut out = vec![];
     for m in &raw {
         let d = m.get("date").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let tss = m.get("time_start").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let past = match slot_dt(&d, &tss) {
+        let past = match slot_dt(&d, &tss, offset) {
             Some(sd) => sd < min_t || sd > max_t,
             None => true,
         };
@@ -1810,8 +1845,9 @@ fn h_book(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx, id_st
     if to_i64(row.get("is_booked").unwrap_or(&Value::Null)) == 1 {
         return Resp::err(409, "Slot already booked");
     }
-    if let Some(sd) = slot_dt(&date, &ts) {
-        let now = Local::now();
+    let offset = app_offset_secs(db);
+    if let Some(sd) = slot_dt(&date, &ts, offset) {
+        let now = Utc::now();
         if sd < now + CDur::hours(1) {
             return Resp::err(400, "Слот можно забронировать минимум за 1 час");
         }

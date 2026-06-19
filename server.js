@@ -21,6 +21,28 @@ process.on('uncaughtException', (err) => {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Часовой пояс склада: слоты хранятся как местное «стенное» время (для РФ —
+// Москва, UTC+3, без перехода на летнее). Момент слота в UTC вычисляется по
+// фиксированному смещению, поэтому правило «минимум за час» работает корректно
+// независимо от таймзоны самого сервера. Настраивается TZ_OFFSET_HOURS.
+// Приоритет: настройка в кабинете (tz_offset_hours) → переменная окружения
+// TZ_OFFSET_HOURS → 3 (Москва).
+function appTzOffsetHours() {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'tz_offset_hours'").get();
+    if (row && row.value !== '' && row.value !== null) {
+      const h = parseInt(row.value, 10);
+      if (Number.isFinite(h)) return h;
+    }
+  } catch (e) {}
+  const envH = parseInt(process.env.TZ_OFFSET_HOURS, 10);
+  return Number.isFinite(envH) ? envH : 3;
+}
+function slotInstantMs(date, timeStart) {
+  const ms = Date.parse(`${date}T${timeStart}:00Z`);
+  return Number.isNaN(ms) ? NaN : ms - appTzOffsetHours() * 3600000;
+}
 // Behind a reverse proxy (nginx) trust X-Forwarded-* so req.ip is the real
 // client address (used by the allowed-IP checks). Configurable via TRUST_PROXY.
 if (process.env.TRUST_PROXY) {
@@ -652,13 +674,13 @@ app.get('/api/slots', async (req, res) => {
   }
   // "past" depends on the current time, so it is always computed fresh,
   // never served from cache.
-  const minTime = new Date(Date.now() + 3600000);
-  const maxTime = new Date(Date.now() + 1209600000);
+  const minMs = Date.now() + 3600000;
+  const maxMs = Date.now() + 1209600000;
   const enriched = slots.map(s => {
-    const slotDate = new Date(`${s.date}T${s.time_start}`);
+    const inst = slotInstantMs(s.date, s.time_start);
     return {
       ...s,
-      past: slotDate <= minTime || slotDate > maxTime
+      past: inst <= minMs || inst > maxMs
     };
   });
   res.json({ slots: enriched, weekday: true });
@@ -826,11 +848,11 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
       return res.status(400).json({ error: 'Вы указали более трех счетов в раздел До трех товаров в накладной, для отгрузки более трех товаров выберите раздел Сборный заказ' });
     }
   }
-  const slotDate = new Date(`${slot.date}T${slot.time_start}`);
-  if (slotDate <= new Date(Date.now() + 3600000)) {
+  const slotMs = slotInstantMs(slot.date, slot.time_start);
+  if (slotMs <= Date.now() + 3600000) {
     return res.status(400).json({ error: 'Слот можно забронировать минимум за 1 час' });
   }
-  if (slotDate > new Date(Date.now() + 1209600000)) {
+  if (slotMs > Date.now() + 1209600000) {
     return res.status(400).json({ error: 'Нельзя записаться на дату более 2 недель от текущей' });
   }
   // Conditional update guards against the double-booking race: only one
@@ -1127,6 +1149,19 @@ app.post('/api/manager/settings/1c/credentials', requireManager, (req, res) => {
 app.post('/api/manager/settings/1c/password', requireManager, (req, res) => {
   const { password } = req.body;
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('1c_password', ?)").run(password || '');
+  res.json({ success: true });
+});
+
+app.get('/api/manager/settings/timezone', requireManager, (req, res) => {
+  res.json({ offsetHours: appTzOffsetHours() });
+});
+
+app.post('/api/manager/settings/timezone', requireManager, (req, res) => {
+  const h = parseInt(req.body.offsetHours, 10);
+  if (!Number.isFinite(h) || h < -12 || h > 14) {
+    return res.status(400).json({ error: 'Недопустимое смещение (от -12 до 14)' });
+  }
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('tz_offset_hours', ?)").run(String(h));
   res.json({ success: true });
 });
 

@@ -818,6 +818,16 @@
             <span>Работаем в выходные дни (сб, вс)</span>
           </label>
         </div>
+
+        <div class="form-group" style="margin-bottom:16px">
+          <label>Часовой пояс склада (смещение от UTC, ч)</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="settingsTzOffset" min="-12" max="14" step="1" style="width:120px" placeholder="3">
+            <button class="btn btn-primary" onclick="saveTimezone()" style="white-space:nowrap">Сохранить</button>
+            <span style="color:#718096;font-size:0.82rem">Москва = 3. Влияет на правило «свободно минимум за час».</span>
+          </div>
+          <div id="tzStatus" style="color:#38a169;margin-top:8px;display:none"></div>
+        </div>
         <div class="form-group" style="margin-bottom:16px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
             <input type="checkbox" id="settingsMascot" style="width:18px;height:18px;cursor:pointer" onchange="saveSettingsMascot()">
@@ -2525,7 +2535,34 @@
         const smsRes = await fetch('/api/manager/settings/smsru', { credentials: 'include' });
         const smsData = await smsRes.json();
         document.getElementById('smsruApiKey').value = smsData.apiKey || '';
+
+        const tzRes = await fetch('/api/manager/settings/timezone', { credentials: 'include' });
+        const tzData = await tzRes.json();
+        document.getElementById('settingsTzOffset').value = (tzData.offsetHours !== undefined && tzData.offsetHours !== null) ? tzData.offsetHours : 3;
       } catch {}
+    }
+
+    async function saveTimezone() {
+      const offsetHours = parseInt(document.getElementById('settingsTzOffset').value, 10);
+      const status = document.getElementById('tzStatus');
+      try {
+        const res = await fetch('/api/manager/settings/timezone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ offsetHours })
+        });
+        const data = await res.json();
+        if (data.success) {
+          status.textContent = 'Часовой пояс сохранён';
+          status.style.color = '#38a169';
+        } else {
+          status.textContent = data.error || 'Ошибка';
+          status.style.color = '#e53e3e';
+        }
+        status.style.display = 'block';
+        setTimeout(() => status.style.display = 'none', 3000);
+      } catch { alert('Ошибка сети'); }
     }
 
     async function saveSettingsLogging() {

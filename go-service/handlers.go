@@ -16,6 +16,17 @@ const tsLayout = "2006-01-02 15:04:05"
 
 func nowTS() string { return time.Now().Format(tsLayout) }
 
+// appLoc — часовой пояс склада (по умолчанию UTC+3, Москва), не зависящий от
+// таймзоны сервера. Слоты задаются как местное время; парсинг в этом поясе даёт
+// корректный абсолютный момент для сравнения с time.Now(). Настройка: TZ_OFFSET_HOURS.
+func appTzOffsetHours() int {
+	return atoiDef(db.getSetting("tz_offset_hours", env("TZ_OFFSET_HOURS", "3")), 3)
+}
+
+func appLoc() *time.Location {
+	return time.FixedZone("APP", appTzOffsetHours()*3600)
+}
+
 // apiRouter dispatches all /api/* requests.
 func apiRouter(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
@@ -221,7 +232,7 @@ func hPublicSlots(w http.ResponseWriter, r *http.Request) {
 		d := fmt.Sprintf("%v", m["date"])
 		tss := fmt.Sprintf("%v", m["time_start"])
 		past := true
-		if sd, err := time.ParseInLocation("2006-01-02 15:04", d+" "+tss, time.Local); err == nil {
+		if sd, err := time.ParseInLocation("2006-01-02 15:04", d+" "+tss, appLoc()); err == nil {
 			past = sd.Before(minTime) || sd.After(maxTime)
 		}
 		mm := map[string]any{}
@@ -280,7 +291,7 @@ func hBook(w http.ResponseWriter, r *http.Request, idStr string) {
 		writeJSON(w, 409, map[string]any{"error": "Slot already booked"})
 		return
 	}
-	sd, _ := time.ParseInLocation("2006-01-02 15:04", date+" "+ts, time.Local)
+	sd, _ := time.ParseInLocation("2006-01-02 15:04", date+" "+ts, appLoc())
 	if sd.Before(time.Now().Add(time.Hour)) {
 		writeJSON(w, 400, map[string]any{"error": "Слот можно забронировать минимум за 1 час"})
 		return
