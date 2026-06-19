@@ -416,7 +416,7 @@ function validateAccountsWith1C(accounts, validationUrl, username, password) {
     try {
       const urlObj = new URL(validationUrl);
       const client = urlObj.protocol === 'https:' ? https : http;
-      const reqBodyStr = JSON.stringify({ invoice_number: accounts });
+      const reqBodyStr = JSON.stringify({ invoce_number: accounts });
       const options = {
         hostname: urlObj.hostname,
         port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
@@ -495,7 +495,7 @@ function checkPaymentWith1C(accounts, paymentCheckUrl, username, password) {
     try {
       const urlObj = new URL(paymentCheckUrl);
       const client = urlObj.protocol === 'https:' ? https : http;
-      const reqBodyStr = JSON.stringify({ invoice_number: accounts });
+      const reqBodyStr = JSON.stringify({ invoce_number: accounts });
       const options = {
         hostname: urlObj.hostname,
         port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
@@ -545,7 +545,7 @@ function checkReadyWith1C(accounts, readyCheckUrl, username, password) {
     try {
       const urlObj = new URL(readyCheckUrl);
       const client = urlObj.protocol === 'https:' ? https : http;
-      const reqBodyStr = JSON.stringify({ invoice_number: accounts });
+      const reqBodyStr = JSON.stringify({ invoce_number: accounts });
       const options = {
         hostname: urlObj.hostname,
         port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
@@ -1204,9 +1204,9 @@ app.post('/api/manager/settings/1c/test-order-validation', requireManager, async
   const passSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_password'").get();
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
-  const body = JSON.stringify({ invoice_number: accounts });
-  const maskedAuth = username ? `${username}:XXXX` : ':XXXX';
-  const prettyBody = JSON.stringify({ invoice_number: accounts }, null, 2);
+  const body = JSON.stringify({ invoce_number: accounts });
+  const maskedAuth = `${username}:${password}`;
+  const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${validationUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
     const urlObj = new URL(validationUrl);
@@ -1277,9 +1277,9 @@ app.post('/api/manager/settings/1c/test-payment-check', requireManager, async (r
   const passSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_password'").get();
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
-  const body = JSON.stringify({ invoice_number: accounts });
-  const maskedAuth = username ? `${username}:XXXX` : ':XXXX';
-  const prettyBody = JSON.stringify({ invoice_number: accounts }, null, 2);
+  const body = JSON.stringify({ invoce_number: accounts });
+  const maskedAuth = `${username}:${password}`;
+  const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${paymentCheckUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
     const urlObj = new URL(paymentCheckUrl);
@@ -1343,9 +1343,9 @@ app.post('/api/manager/settings/1c/test-ready-check', requireManager, async (req
   const passSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_password'").get();
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
-  const body = JSON.stringify({ invoice_number: accounts });
-  const maskedAuth = username ? `${username}:XXXX` : ':XXXX';
-  const prettyBody = JSON.stringify({ invoice_number: accounts }, null, 2);
+  const body = JSON.stringify({ invoce_number: accounts });
+  const maskedAuth = `${username}:${password}`;
+  const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${readyCheckUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
     const urlObj = new URL(readyCheckUrl);

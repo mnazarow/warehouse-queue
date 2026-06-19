@@ -17,38 +17,55 @@ func validate1CAccount(account string) (bool, string) {
 	if url == "" {
 		return true, "" // 1C not configured → do not block booking
 	}
-	token := db.getSetting("1c_api_token", "")
-	reqBody, _ := json.Marshal(map[string]any{"account": account, "accounts": []string{account}})
+	// 1С использует HTTP Basic (логин/пароль) и поле "invoce_number" (с опечаткой —
+	// именно так названо поле в API 1С). Контракт совпадает с Node-вариантом.
+	username := db.getSetting("1c_username", "")
+	password := db.getSetting("1c_password", "")
+	reqBody, _ := json.Marshal(map[string]any{"invoce_number": []string{account}})
 	req, err := http.NewRequest("POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		logCheck(account, false, 0, "", err.Error(), url, string(reqBody))
-		return false, "ошибка запроса"
+		return true, "" // не блокируем бронь из-за ошибки формирования запроса
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if username != "" || password != "" {
+		req.SetBasicAuth(username, password)
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		logCheck(account, false, 0, "", err.Error(), url, string(reqBody))
-		// Network error talking to 1C: do not hard-block unless admin disallowed invalid.
-		return false, "1С недоступна"
+		return true, "" // 1С недоступна → fail-open (как в Node)
 	}
 	defer resp.Body.Close()
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	respText := string(bodyBytes)
-	ok := resp.StatusCode == 200
-	// Treat explicit negative payloads as failure even on HTTP 200.
-	low := strings.ToLower(respText)
-	if ok && (strings.Contains(low, `"valid":false`) || strings.Contains(low, `"found":false`) || strings.Contains(low, `"ready":false`)) {
-		ok = false
+
+	var parsed map[string]any
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		logCheck(account, false, resp.StatusCode, respText, "Parse error", url, string(reqBody))
+		return true, "" // не разобрали ответ → не блокируем
 	}
-	logCheck(account, ok, resp.StatusCode, respText, "", url, string(reqBody))
-	if ok {
+	results, ok := parsed["results"].(map[string]any)
+	if !ok {
+		logCheck(account, false, resp.StatusCode, respText, "No results field", url, string(reqBody))
+		return true, "" // нет поля results → проверка пропущена
+	}
+	// Счёт валиден, если статус начинается с "found"/"найден" (без учёта регистра).
+	allFound := true
+	for _, v := range results {
+		rm, _ := v.(map[string]any)
+		st, _ := rm["status"].(string)
+		s := strings.ToLower(strings.TrimSpace(st))
+		if !strings.HasPrefix(s, "found") && !strings.HasPrefix(s, "найден") {
+			allFound = false
+		}
+	}
+	logCheck(account, allFound, resp.StatusCode, respText, "", url, string(reqBody))
+	if allFound {
 		return true, ""
 	}
-	return false, "счёт не найден"
+	return false, "счёт не найден в 1С"
 }
 
 func logCheck(accounts string, success bool, status int, respBody, errStr, url, reqBody string) {

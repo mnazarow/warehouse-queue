@@ -4810,7 +4810,7 @@
       const separator = url.includes('?') ? '&' : '?';
       urlEl.textContent = `POST ${url}${separator}`;
       urlEl.style.color = '#2d3748';
-      authEl.innerHTML = `Authorization: Basic ${username}:${password}<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+      authEl.innerHTML = `Authorization: Basic ${username}:${password}<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
     }
 
     async function saveC1PaymentCheckUrl() {
@@ -4852,7 +4852,7 @@
       urlEl.style.color = '#2d3748';
       const separator = url.includes('?') ? '&' : '?';
       urlEl.textContent = `POST ${url}${separator}`;
-      authEl.innerHTML = `Authorization: Basic ${username}:${password}<br><br>Body:<br>${JSON.stringify({ invoice_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+      authEl.innerHTML = `Authorization: Basic ${username}:${password}<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
     }
 
     async function saveC1Notes() {

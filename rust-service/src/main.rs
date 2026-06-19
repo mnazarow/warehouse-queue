@@ -580,44 +580,69 @@ fn validate_1c(db: &mut Db, account: &str) -> (bool, String) {
     if url.is_empty() {
         return (true, String::new());
     }
-    let token = db.get_setting("1c_api_token", "");
-    let reqbody = json!({"account": account, "accounts": [account]}).to_string();
+    // 1С: HTTP Basic (логин/пароль) + поле "invoce_number" (именно так, с опечаткой,
+    // названо поле в API 1С). Контракт совпадает с Node-вариантом.
+    let username = db.get_setting("1c_username", "");
+    let password = db.get_setting("1c_password", "");
+    let reqbody = json!({ "invoce_number": [account] }).to_string();
     let mut req = ureq::post(&url)
-        .timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(10))
         .set("Content-Type", "application/json");
-    if !token.is_empty() {
-        req = req.set("Authorization", &format!("Bearer {token}"));
+    if !username.is_empty() || !password.is_empty() {
+        let cred = base64_encode(format!("{username}:{password}").as_bytes());
+        req = req.set("Authorization", &format!("Basic {cred}"));
     }
-    match req.send_string(&reqbody) {
-        Ok(resp) => {
-            let status = resp.status() as i64;
-            let text = resp.into_string().unwrap_or_default();
-            let low = text.to_lowercase();
-            let mut okk = status == 200;
-            if okk
-                && (low.contains("\"valid\":false")
-                    || low.contains("\"found\":false")
-                    || low.contains("\"ready\":false"))
-            {
-                okk = false;
-            }
-            log_check(db, account, okk, status, &text, "", &url, &reqbody);
-            if okk {
-                (true, String::new())
-            } else {
-                (false, "счёт не найден".into())
-            }
-        }
+    // Берём тело ответа независимо от HTTP-кода (1С может вернуть results и при 200).
+    let (status, text) = match req.send_string(&reqbody) {
+        Ok(resp) => (resp.status() as i64, resp.into_string().unwrap_or_default()),
         Err(ureq::Error::Status(code, resp)) => {
-            let text = resp.into_string().unwrap_or_default();
-            log_check(db, account, false, code as i64, &text, "", &url, &reqbody);
-            (false, "счёт не найден".into())
+            (code as i64, resp.into_string().unwrap_or_default())
         }
         Err(e) => {
             log_check(db, account, false, 0, "", &e.to_string(), &url, &reqbody);
-            (false, "1С недоступна".into())
+            return (true, String::new()); // 1С недоступна → fail-open (как в Node)
         }
+    };
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let results = match v.get("results").and_then(|r| r.as_object()) {
+        Some(r) => r,
+        None => {
+            log_check(db, account, false, status, &text, "No results field", &url, &reqbody);
+            return (true, String::new()); // нет поля results → проверка пропущена
+        }
+    };
+    let all_found = results.values().all(|item| {
+        let s = item
+            .get("status")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        s.starts_with("found") || s.starts_with("найден")
+    });
+    log_check(db, account, all_found, status, &text, "", &url, &reqbody);
+    if all_found {
+        (true, String::new())
+    } else {
+        (false, "счёт не найден в 1С".into())
     }
+}
+
+// base64 (стандартный алфавит, с паддингом) — для заголовка HTTP Basic, без crate.
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { TABLE[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+    }
+    out
 }
 
 fn send_sms(db: &mut Db, phone: &str, msg: &str) {
