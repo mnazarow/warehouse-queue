@@ -784,7 +784,27 @@ fn safe_name(n: &str) -> bool {
 
 fn git_out(args: &[&str]) -> Result<String, String> {
     let out = Command::new("git").args(args).output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let so = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        return Err(if err.is_empty() { so } else { err });
+    }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+// git_error_hint поясняет типовую серверную ошибку git при обновлении из кабинета.
+fn git_error_hint(msg: &str) -> String {
+    let low = msg.to_lowercase();
+    if low.contains("permission denied") || low.contains("denied") || low.contains("fetch_head") {
+        return format!("{msg}\n\nНет прав на запись в каталог .git: процесс сервиса и владелец репозитория разные. Выполните на сервере:\n  sudo chown -R <пользователь-сервиса>:<группа> <каталог приложения>\n(для systemd по умолчанию пользователь \"warehouse\"), затем повторите обновление.");
+    }
+    if low.contains("dubious ownership") || low.contains("safe.directory") {
+        return format!("{msg}\n\nGit считает каталог небезопасным. Выполните:\n  sudo -u <пользователь-сервиса> git config --global --add safe.directory <каталог приложения>");
+    }
+    if msg.is_empty() {
+        return "git pull завершился с ошибкой".to_string();
+    }
+    msg.to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1550,7 +1570,9 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
         if branch.is_empty() {
             branch = "main".into();
         }
-        let _ = git_out(&["pull", "--ff-only", "origin", branch.as_str()]);
+        if let Err(e) = git_out(&["pull", "--ff-only", "origin", branch.as_str()]) {
+            return Resp::json(200, json!({"success": false, "error": git_error_hint(&e)}));
+        }
         let after = git_out(&["rev-parse", "HEAD"]).unwrap_or_default();
         if before == after {
             return Resp::json(200, json!({"success": true, "updated": false, "message": "Уже последняя версия"}));

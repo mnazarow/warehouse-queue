@@ -2438,6 +2438,18 @@ function gitCmd(args) {
   });
 }
 
+// Делает понятной типовую серверную ошибку git при обновлении из кабинета.
+function gitErrorHint(msg) {
+  const m = String(msg || '');
+  if (/Permission denied|denied|FETCH_HEAD/i.test(m)) {
+    return m + '\n\nНет прав на запись в каталог .git: процесс сервиса и владелец репозитория разные. Выполните на сервере:\n  sudo chown -R <пользователь-сервиса>:<группа> ' + __dirname + '\n(для systemd по умолчанию пользователь "warehouse"), затем повторите обновление.';
+  }
+  if (/dubious ownership|safe\.directory/i.test(m)) {
+    return m + '\n\nGit считает каталог небезопасным. Выполните:\n  sudo -u <пользователь-сервиса> git config --global --add safe.directory ' + __dirname;
+  }
+  return m;
+}
+
 app.get('/api/manager/check-update', requireManager, async (req, res) => {
   try {
     const current = await gitCmd(['rev-parse', 'HEAD']);
@@ -2618,7 +2630,7 @@ app.post('/api/manager/update', requireManager, async (req, res) => {
     // Give the response time to flush, then exit so the supervisor restarts us.
     setTimeout(function() { process.exit(0); }, 800);
   } catch (e) {
-    res.json({ success: false, error: String(e.message || e) });
+    res.json({ success: false, error: gitErrorHint(e.message || e) });
   }
 });
 

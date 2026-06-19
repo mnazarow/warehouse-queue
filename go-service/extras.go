@@ -746,6 +746,21 @@ func gitOut(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// gitErrorHint поясняет типовую серверную ошибку git при обновлении из кабинета.
+func gitErrorHint(msg string) string {
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "permission denied") || strings.Contains(low, "denied") || strings.Contains(low, "fetch_head") {
+		return msg + "\n\nНет прав на запись в каталог .git: процесс сервиса и владелец репозитория разные. Выполните на сервере:\n  sudo chown -R <пользователь-сервиса>:<группа> <каталог приложения>\n(для systemd по умолчанию пользователь \"warehouse\"), затем повторите обновление."
+	}
+	if strings.Contains(low, "dubious ownership") || strings.Contains(low, "safe.directory") {
+		return msg + "\n\nGit считает каталог небезопасным. Выполните:\n  sudo -u <пользователь-сервиса> git config --global --add safe.directory <каталог приложения>"
+	}
+	if msg == "" {
+		return "git pull завершился с ошибкой"
+	}
+	return msg
+}
+
 func hCheckUpdate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireAdmin(w, r); !ok {
 		return
@@ -780,7 +795,10 @@ func hUpdate(w http.ResponseWriter, r *http.Request) {
 	if branch == "" {
 		branch = "main"
 	}
-	gitOut("pull", "--ff-only", "origin", branch)
+	if out, err := gitOut("pull", "--ff-only", "origin", branch); err != nil {
+		writeJSON(w, 200, map[string]any{"success": false, "error": gitErrorHint(out)})
+		return
+	}
 	after, _ := gitOut("rev-parse", "HEAD")
 	if before == after {
 		writeJSON(w, 200, map[string]any{"success": true, "updated": false, "message": "Уже последняя версия"})
