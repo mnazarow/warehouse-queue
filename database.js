@@ -38,7 +38,8 @@ function initDatabase() {
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       first_name TEXT DEFAULT '',
-      last_name TEXT DEFAULT ''
+      last_name TEXT DEFAULT '',
+      is_admin INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS storekeepers (
@@ -152,6 +153,9 @@ function initDatabase() {
   }
   if (!mgrColCheck.some(c => c.name === 'warehouse_id')) {
     db.exec("ALTER TABLE managers ADD COLUMN warehouse_id INTEGER DEFAULT NULL");
+  }
+  if (!mgrColCheck.some(c => c.name === 'is_admin')) {
+    db.exec("ALTER TABLE managers ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
   }
 
   db.exec(`
@@ -394,7 +398,7 @@ function initDatabase() {
   const existing = db.prepare('SELECT COUNT(*) as cnt FROM managers').get();
   if (existing.cnt === 0) {
     const hash = crypto.createHash('sha256').update('admin123').digest('hex');
-    db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name) VALUES (?, ?, ?, ?)').run('admin', hash, 'Главный', 'Администратор');
+    db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name, is_admin) VALUES (?, ?, ?, ?, 1)').run('admin', hash, 'Главный', 'Администратор');
     console.log('Default manager created: admin / admin123');
   }
 

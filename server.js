@@ -46,6 +46,14 @@ app.use(session({
   saveUninitialized: false,
   cookie: { maxAge: 24 * 60 * 60 * 1000, sameSite: 'lax', httpOnly: true }
 }));
+// Admin-only areas (Settings tab, manager management, backups, DB migration,
+// IP networks, app updates). Must be AFTER the session middleware so req.session
+// is available. Главный администратор (admin) — администратор по умолчанию.
+['/api/manager/settings', '/api/manager/list', '/api/manager/create', '/api/manager/backup', '/api/manager/backups',
+ '/api/manager/restore', '/api/manager/migrate', '/api/manager/switch', '/api/manager/update',
+ '/api/manager/check-update', '/api/manager/networks', '/api/manager/migration'].forEach(function(p) {
+  app.use(p, requireManager, requireAdmin);
+});
 
 const sqliteDb = initDatabase();
 const dbAdapter = require('./db-adapter');
@@ -299,10 +307,26 @@ function ensurePageVisitsTable() {
   } catch (e) { console.error('ensurePageVisitsTable:', e.message); }
 }
 
+// Ensure managers.is_admin exists in the active backend (covers PG DBs migrated
+// before this column was added).
+function ensureManagerAdminColumn() {
+  try {
+    if (dbAdapter.getType() === 'postgresql') {
+      db.exec("ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_admin INTEGER NOT NULL DEFAULT 0");
+    } else {
+      const cols = sqliteDb.prepare("PRAGMA table_info('managers')").all().map(c => c.name);
+      if (cols.indexOf('is_admin') === -1) sqliteDb.exec("ALTER TABLE managers ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+    }
+  } catch (e) { console.error('ensureManagerAdminColumn:', e.message); }
+}
+
 loadTtlOverrides();
 initRedis();
 scheduleAutobackup();
 ensurePageVisitsTable();
+ensureManagerAdminColumn();
+// Главный администратор (admin) всегда имеет признак администратора.
+try { db.prepare("UPDATE managers SET is_admin = 1 WHERE username = 'admin'").run(); } catch (e) {}
 
 function getIp(req) {
   return req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : req.connection.remoteAddress || '';
@@ -346,9 +370,23 @@ function logAction(userType, userName, action, details, slotId, ip, userAgent) {
 }
 
 function requireManager(req, res, next) {
-  if (!req.session.managerId) {
+  if (!req.session || !req.session.managerId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  next();
+}
+
+function isAdminManager(req) {
+  if (!req.session || !req.session.managerId) return false;
+  try {
+    const m = db.prepare('SELECT is_admin FROM managers WHERE id = ?').get(req.session.managerId);
+    return !!(m && (m.is_admin === 1 || m.is_admin === '1' || m.is_admin === true));
+  } catch (e) { return false; }
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.session || !req.session.managerId) return res.status(401).json({ error: 'Unauthorized' });
+  if (!isAdminManager(req)) return res.status(403).json({ error: 'Доступ только для администраторов' });
   next();
 }
 
@@ -835,7 +873,7 @@ app.post('/api/manager/login', (req, res) => {
   req.session.username = manager.username;
   req.session.firstName = manager.first_name;
   req.session.lastName = manager.last_name;
-  res.json({ success: true, id: manager.id, username: manager.username, firstName: manager.first_name, lastName: manager.last_name });
+  res.json({ success: true, id: manager.id, username: manager.username, firstName: manager.first_name, lastName: manager.last_name, isAdmin: !!(manager.is_admin === 1 || manager.is_admin === '1' || manager.is_admin === true) });
 });
 
 app.post('/api/manager/logout', requireManager, (req, res) => {
@@ -848,7 +886,7 @@ app.get('/api/manager/me', requireManager, async (req, res) => {
   const cached = await redisGet(cacheKey);
   if (cached) return res.json(JSON.parse(cached));
   const mgr = db.prepare('SELECT * FROM managers WHERE id = ?').get(req.session.managerId);
-  const response = { id: mgr.id, username: mgr.username, firstName: mgr.first_name, lastName: mgr.last_name, warehouseId: mgr.warehouse_id };
+  const response = { id: mgr.id, username: mgr.username, firstName: mgr.first_name, lastName: mgr.last_name, warehouseId: mgr.warehouse_id, isAdmin: !!(mgr.is_admin === 1 || mgr.is_admin === '1' || mgr.is_admin === true) };
   redisSet(cacheKey, JSON.stringify(response), 300);
   res.json(response);
 });
@@ -1635,7 +1673,7 @@ app.get('/api/manager/list', requireManager, async (req, res) => {
 });
 
 app.post('/api/manager/create', requireManager, (req, res) => {
-  const { username, password, firstName, lastName, warehouseId } = req.body;
+  const { username, password, firstName, lastName, warehouseId, isAdmin } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });
   }
@@ -1644,14 +1682,14 @@ app.post('/api/manager/create', requireManager, (req, res) => {
     return res.status(409).json({ error: 'Username already exists' });
   }
   const hash = crypto.createHash('sha256').update(password).digest('hex');
-  db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id) VALUES (?, ?, ?, ?, ?)').run(username, hash, firstName || '', lastName || '', warehouseId || null);
+  db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id, is_admin) VALUES (?, ?, ?, ?, ?, ?)').run(username, hash, firstName || '', lastName || '', warehouseId || null, isAdmin ? 1 : 0);
   redisFlushByPrefix('list');
   res.json({ success: true });
 });
 
-app.put('/api/manager/:id', requireManager, (req, res) => {
+app.put('/api/manager/:id', requireManager, requireAdmin, (req, res) => {
   const { id } = req.params;
-  const { username, password, firstName, lastName, warehouseId } = req.body;
+  const { username, password, firstName, lastName, warehouseId, isAdmin } = req.body;
   if (!username) {
     return res.status(400).json({ error: 'Username is required' });
   }
@@ -1665,18 +1703,21 @@ app.put('/api/manager/:id', requireManager, (req, res) => {
       return res.status(409).json({ error: 'Username already exists' });
     }
   }
+  // Главного администратора (admin) нельзя лишить прав администратора.
+  let adminFlag = isAdmin ? 1 : 0;
+  if (mgr.username === 'admin') adminFlag = 1;
   if (password) {
     const hash = crypto.createHash('sha256').update(password).digest('hex');
-    db.prepare('UPDATE managers SET username = ?, password_hash = ?, first_name = ?, last_name = ?, warehouse_id = ? WHERE id = ?').run(username, hash, firstName || '', lastName || '', warehouseId || null, id);
+    db.prepare('UPDATE managers SET username = ?, password_hash = ?, first_name = ?, last_name = ?, warehouse_id = ?, is_admin = ? WHERE id = ?').run(username, hash, firstName || '', lastName || '', warehouseId || null, adminFlag, id);
   } else {
-    db.prepare('UPDATE managers SET username = ?, first_name = ?, last_name = ?, warehouse_id = ? WHERE id = ?').run(username, firstName || '', lastName || '', warehouseId || null, id);
+    db.prepare('UPDATE managers SET username = ?, first_name = ?, last_name = ?, warehouse_id = ?, is_admin = ? WHERE id = ?').run(username, firstName || '', lastName || '', warehouseId || null, adminFlag, id);
   }
   redisFlushByPrefix('list');
   redisFlushByPrefix('manager-me');
   res.json({ success: true });
 });
 
-app.delete('/api/manager/:id', requireManager, (req, res) => {
+app.delete('/api/manager/:id', requireManager, requireAdmin, (req, res) => {
   const { id } = req.params;
   if (Number(id) === req.session.managerId) {
     return res.status(400).json({ error: 'Cannot delete yourself' });
@@ -1684,6 +1725,9 @@ app.delete('/api/manager/:id', requireManager, (req, res) => {
   const mgr = db.prepare('SELECT * FROM managers WHERE id = ?').get(id);
   if (!mgr) {
     return res.status(404).json({ error: 'Manager not found' });
+  }
+  if (mgr.username === 'admin') {
+    return res.status(400).json({ error: 'Нельзя удалить главного администратора' });
   }
   db.prepare('DELETE FROM managers WHERE id = ?').run(id);
   redisFlushByPrefix('list');
@@ -2688,6 +2732,23 @@ app.post('/api/manager/backups/:name/restore', requireManager, (req, res) => {
 app.get('/api/public/privacy-policy', (req, res) => {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'privacy_policy_text'").get();
   res.json({ text: row ? row.value : '' });
+});
+
+app.get('/api/public/cookie-policy', (req, res) => {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'cookie_policy_text'").get();
+  res.json({ text: row ? row.value : '' });
+});
+
+app.get('/api/manager/settings/cookie-policy', requireManager, (req, res) => {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'cookie_policy_text'").get();
+  res.json({ text: row ? row.value : '' });
+});
+
+app.post('/api/manager/settings/cookie-policy', requireManager, (req, res) => {
+  const text = (req.body && typeof req.body.text === 'string') ? req.body.text : '';
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('cookie_policy_text', ?)").run(text);
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', 'Изменил текст политики cookie', 0, getIp(req), getUserAgent(req));
+  res.json({ success: true });
 });
 
 app.get('/api/manager/settings/privacy-policy', requireManager, (req, res) => {

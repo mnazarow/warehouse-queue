@@ -140,13 +140,20 @@
     </div>
   </div>
 
-  <div class="modal-overlay" id="privacyModal" onclick="if(event.target===this)closePrivacy()">
+  <div class="modal-overlay" id="policyModal" onclick="if(event.target===this)closePolicy()">
     <div class="modal" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column">
-      <h2 style="margin-top:0">Политика обработки персональных данных</h2>
-      <div id="privacyModalText" style="white-space:pre-wrap;overflow:auto;font-size:0.95rem;line-height:1.5;flex:1"></div>
+      <h2 id="policyModalTitle" style="margin-top:0"></h2>
+      <div id="policyModalText" style="white-space:pre-wrap;overflow:auto;font-size:0.95rem;line-height:1.5;flex:1"></div>
       <div class="modal-actions" style="margin-top:16px">
-        <button class="btn btn-secondary" onclick="closePrivacy()">Закрыть</button>
+        <button class="btn btn-secondary" onclick="closePolicy()">Закрыть</button>
       </div>
+    </div>
+  </div>
+
+  <div id="cookieBanner" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#2d3748;color:#fff;padding:14px 18px;box-shadow:0 -2px 12px rgba(0,0,0,0.25)">
+    <div style="max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center">
+      <span style="font-size:0.9rem;line-height:1.4">Мы используем файлы cookie для вашего удобства. Продолжая пользоваться сайтом, вы соглашаетесь с <a href="#" onclick="showCookiePolicy();return false" style="color:#90cdf4">политикой использования cookie</a>.</span>
+      <button class="btn btn-primary" onclick="acceptCookies()">Принять</button>
     </div>
   </div>
 
@@ -395,19 +402,30 @@
       bookingForce = false;
     }
 
-    async function showPrivacy() {
-      const m = document.getElementById('privacyModal');
-      const t = document.getElementById('privacyModalText');
+    async function showPolicy(title, url) {
+      document.getElementById('policyModalTitle').textContent = title;
+      const t = document.getElementById('policyModalText');
       t.textContent = 'Загрузка...';
-      m.classList.add('open');
+      document.getElementById('policyModal').classList.add('open');
       try {
-        const res = await fetch('/api/public/privacy-policy');
+        const res = await fetch(url);
         const d = await res.json();
-        t.textContent = (d.text && d.text.trim()) ? d.text : 'Текст политики пока не задан.';
+        t.textContent = (d.text && d.text.trim()) ? d.text : 'Текст пока не задан.';
       } catch (e) { t.textContent = 'Не удалось загрузить текст.'; }
     }
-    function closePrivacy() {
-      document.getElementById('privacyModal').classList.remove('open');
+    function closePolicy() {
+      document.getElementById('policyModal').classList.remove('open');
+    }
+    function showPrivacy() { showPolicy('Политика обработки персональных данных', '/api/public/privacy-policy'); }
+    function showCookiePolicy() { showPolicy('Политика использования cookie', '/api/public/cookie-policy'); }
+    function acceptCookies() {
+      try { localStorage.setItem('cookie_consent', '1'); } catch (e) {}
+      document.getElementById('cookieBanner').style.display = 'none';
+    }
+    function initCookieBanner() {
+      let ok = false;
+      try { ok = localStorage.getItem('cookie_consent') === '1'; } catch (e) {}
+      if (!ok) document.getElementById('cookieBanner').style.display = 'block';
     }
 
     async function confirmBooking() {
@@ -554,6 +572,7 @@
     loadAllowNoAccount();
     setInterval(loadSlots, 30000);
     try { fetch('/api/visit', { method: 'POST' }).catch(function(){}); } catch (e) {}
+    initCookieBanner();
   </script>
 </body>
 </html>
