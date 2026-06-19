@@ -1108,6 +1108,16 @@
           <div id="dbStatus" style="margin-top:16px;padding:12px 16px;border-radius:8px;font-size:0.85rem;border:1px solid var(--border-color,#e2e8f0)"></div>
         </div>
       </div>
+
+      <div class="section-header">
+        <h2>Политика обработки персональных данных</h2>
+      </div>
+      <div style="max-width:760px;margin-bottom:18px">
+        <p style="font-size:0.85rem;color:#718096;margin:0 0 8px">Этот текст открывается по ссылке рядом с галкой согласия на странице записи.</p>
+        <textarea id="privacyText" rows="10" style="width:100%;padding:10px 12px;border:1px solid #cbd5e0;border-radius:8px;font-size:0.9rem;font-family:inherit;resize:vertical" placeholder="Введите текст политики обработки персональных данных..."></textarea>
+        <div style="margin-top:8px"><button class="btn btn-primary" onclick="savePrivacy()">Сохранить</button></div>
+        <div id="privacyMessage" style="margin-top:10px;display:none;font-size:0.85rem;color:#38a169"></div>
+      </div>
     </div>
 
     <div id="vehicleClassModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeVehicleClassModal()">
@@ -2121,7 +2131,7 @@
       if (name === 'bannedphones') loadBannedPhones();
       if (name === 'bannedips') loadBannedIps();
       if (name === 'vehicleclasses') { loadVehicleClasses(); loadLoadTypes(); }
-      if (name === 'settings') { loadAbout(); loadSettings(); loadAutobackup(); loadAnalytics('visits'); loadAnalytics('bookings'); loadDevices(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
+      if (name === 'settings') { loadAbout(); loadSettings(); loadAutobackup(); loadAnalytics('visits'); loadAnalytics('bookings'); loadDevices(); loadPrivacy(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
     }
 
     let aboutTimer = null;
@@ -2216,6 +2226,26 @@
         if (!res.ok) { el.textContent = 'Ошибка: ' + (d.error || res.status); return; }
         renderBarChart(el, d.labels || [], d.counts || []);
       } catch (e) { el.textContent = 'Ошибка: ' + e.message; }
+    }
+
+    async function loadPrivacy() {
+      try {
+        const res = await fetch('/api/manager/settings/privacy-policy', { credentials: 'include' });
+        if (res.ok) { const d = await res.json(); document.getElementById('privacyText').value = d.text || ''; }
+      } catch {}
+    }
+    async function savePrivacy() {
+      const msg = document.getElementById('privacyMessage');
+      try {
+        const res = await fetch('/api/manager/settings/privacy-policy', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', body: JSON.stringify({ text: document.getElementById('privacyText').value })
+        });
+        const d = await res.json();
+        if (!res.ok || !d.success) throw new Error(d.error || 'Ошибка');
+        msg.style.color = '#38a169'; msg.textContent = 'Сохранено'; msg.style.display = 'block';
+        setTimeout(() => { msg.style.display = 'none'; }, 3000);
+      } catch (e) { msg.style.color = '#e53e3e'; msg.textContent = 'Ошибка: ' + e.message; msg.style.display = 'block'; }
     }
 
     async function loadDevices() {

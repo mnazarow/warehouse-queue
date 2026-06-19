@@ -2685,6 +2685,23 @@ app.post('/api/manager/backups/:name/restore', requireManager, (req, res) => {
   }
 });
 
+app.get('/api/public/privacy-policy', (req, res) => {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'privacy_policy_text'").get();
+  res.json({ text: row ? row.value : '' });
+});
+
+app.get('/api/manager/settings/privacy-policy', requireManager, (req, res) => {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'privacy_policy_text'").get();
+  res.json({ text: row ? row.value : '' });
+});
+
+app.post('/api/manager/settings/privacy-policy', requireManager, (req, res) => {
+  const text = (req.body && typeof req.body.text === 'string') ? req.body.text : '';
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('privacy_policy_text', ?)").run(text);
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', 'Изменил текст политики обработки ПДн', 0, getIp(req), getUserAgent(req));
+  res.json({ success: true });
+});
+
 app.get('/api/manager/settings/work-on-weekends', requireManager, (req, res) => {
   const setting = db.prepare("SELECT value FROM settings WHERE key = 'work_on_weekends'").get();
   res.json({ enabled: setting ? setting.value === '1' : false });

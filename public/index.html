@@ -111,6 +111,15 @@
           <button class="btn btn-primary" onclick="forceBooking()" style="background:#dd6b20">Продолжить</button>
         </div>
       </div>
+      <div class="form-group" style="margin-bottom:14px">
+        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.9rem;line-height:1.4">
+          <input type="checkbox" id="consentCheck" style="width:18px;height:18px;margin-top:2px;cursor:pointer;flex-shrink:0">
+          <span>Даю своё согласие на обработку и хранение персональных данных <span style="color:#e53e3e">*</span></span>
+        </label>
+        <div style="margin-top:4px;margin-left:26px;font-size:0.85rem">
+          <a href="#" onclick="showPrivacy();return false">Политика обработки персональных данных</a>
+        </div>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeModal()">Отмена</button>
         <button class="btn btn-primary" onclick="confirmBooking()" id="bookBtn">Записаться</button>
@@ -127,6 +136,16 @@
         <h2>Вы записаны!</h2>
         <p id="successInfo"></p>
         <button class="btn btn-primary" onclick="closeSuccess()">Готово</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="privacyModal" onclick="if(event.target===this)closePrivacy()">
+    <div class="modal" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column">
+      <h2 style="margin-top:0">Политика обработки персональных данных</h2>
+      <div id="privacyModalText" style="white-space:pre-wrap;overflow:auto;font-size:0.95rem;line-height:1.5;flex:1"></div>
+      <div class="modal-actions" style="margin-top:16px">
+        <button class="btn btn-secondary" onclick="closePrivacy()">Закрыть</button>
       </div>
     </div>
   </div>
@@ -322,6 +341,7 @@
       document.getElementById('captchaAnswer').value = '';
       document.getElementById('vehicleClassSelect').value = '';
       document.getElementById('loadTypeSelect').value = '';
+      document.getElementById('consentCheck').checked = false;
       hideValidationError();
       loadCaptcha();
       try {
@@ -375,6 +395,21 @@
       bookingForce = false;
     }
 
+    async function showPrivacy() {
+      const m = document.getElementById('privacyModal');
+      const t = document.getElementById('privacyModalText');
+      t.textContent = 'Загрузка...';
+      m.classList.add('open');
+      try {
+        const res = await fetch('/api/public/privacy-policy');
+        const d = await res.json();
+        t.textContent = (d.text && d.text.trim()) ? d.text : 'Текст политики пока не задан.';
+      } catch (e) { t.textContent = 'Не удалось загрузить текст.'; }
+    }
+    function closePrivacy() {
+      document.getElementById('privacyModal').classList.remove('open');
+    }
+
     async function confirmBooking() {
       const name = document.getElementById('customerName').value.trim();
       const phone = document.getElementById('customerPhone').value.replace(/\D/g, '');
@@ -402,6 +437,10 @@
       }
       if (!loadTypeId) {
         alert('Выберите вид загрузки');
+        return;
+      }
+      if (!document.getElementById('consentCheck').checked) {
+        alert('Необходимо дать согласие на обработку и хранение персональных данных');
         return;
       }
       const bookBtn = document.getElementById('bookBtn');
