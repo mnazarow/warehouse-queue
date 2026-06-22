@@ -395,8 +395,7 @@
       document.getElementById('vehicleClassSelect').value = '';
       document.getElementById('loadTypeSelect').value = '';
       document.getElementById('consentCheck').checked = false;
-      hideValidationError();
-      loadCaptcha();
+      hideValidationError(); // сбрасывает ошибку, грузит капчу и очищает ответ
       try {
         const vcRes = await fetch('/api/public/vehicle-classes');
         const vcData = await vcRes.json();
