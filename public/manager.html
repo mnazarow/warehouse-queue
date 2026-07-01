@@ -390,6 +390,7 @@
     <div class="header">
       <h1>Кабинет менеджера</h1>
       <div class="header-actions">
+        <span id="serverClock" class="user-name" title="Текущее время сервера"></span>
         <span id="usernameDisplay" class="user-name"></span>
         <a href="/storekeeper" target="_blank" rel="noopener" class="change-pwd-link">Кабинет кладовщиков ↗</a>
         <span class="change-pwd-link" onclick="openPasswordModal()">Сменить пароль</span>
@@ -1752,6 +1753,7 @@
         document.getElementById('dashboardView').style.display = 'block';
         document.getElementById('usernameDisplay').textContent = [data.firstName, data.lastName].filter(Boolean).join(' ') || data.username;
         applyAdminVisibility(!!data.isAdmin);
+        initServerClock();
         initFilters();
         await loadWarehouseFilter();
         loadSlots();
@@ -1876,16 +1878,19 @@
         } else if (s.is_booked && s.in_progress && !s.assembling) {
           actions = `${msgBtn}
             <button class="btn btn-primary btn-sm" onclick="openAssignForAssembly(${s.id})">Взять на сборку</button>
+            <button class="btn btn-secondary btn-sm" onclick="completeSlot(${s.id})">Завершить</button>
             <button class="btn btn-secondary btn-sm" onclick="cancelSlot(${s.id})">Отменить</button>
           `;
         } else if (s.is_booked && s.confirmed && !s.in_progress) {
           actions = `${msgBtn}
             <button class="btn btn-primary btn-sm" onclick="openAssignModal(${s.id})">Передать кладовщику</button>
+            <button class="btn btn-secondary btn-sm" onclick="completeSlot(${s.id})">Завершить</button>
             <button class="btn btn-secondary btn-sm" onclick="cancelSlot(${s.id})">Отменить</button>
           `;
         } else if (s.is_booked && !s.confirmed) {
           actions = `${msgBtn}
             <button class="btn btn-primary btn-sm" onclick="confirmSlot(${s.id})">Подтвердить</button>
+            <button class="btn btn-secondary btn-sm" onclick="completeSlot(${s.id})">Завершить</button>
             <button class="btn btn-secondary btn-sm" onclick="cancelSlot(${s.id})">Отменить</button>
           `;
         } else {
@@ -5507,6 +5512,35 @@
       applyTheme(theme);
     })();
 
+    // Живые часы сервера в часовом поясе склада (TZ_OFFSET_HOURS).
+    let serverClockDelta = 0;   // серверное время − клиентское, мс
+    let serverTzOffsetH = 3;    // смещение пояса склада, ч
+    let _serverClockStarted = false;
+
+    async function initServerClock() {
+      try {
+        const [aboutRes, tzRes] = await Promise.all([
+          fetch('/api/manager/about', { credentials: 'include' }),
+          fetch('/api/manager/settings/timezone', { credentials: 'include' })
+        ]);
+        const about = await aboutRes.json();
+        const tz = await tzRes.json();
+        if (about && about.serverTime) serverClockDelta = new Date(about.serverTime).getTime() - Date.now();
+        if (tz && tz.offsetHours !== undefined && tz.offsetHours !== null) serverTzOffsetH = Number(tz.offsetHours);
+      } catch (e) {}
+      tickServerClock();
+      if (!_serverClockStarted) { _serverClockStarted = true; setInterval(tickServerClock, 1000); }
+    }
+
+    function tickServerClock() {
+      const el = document.getElementById('serverClock');
+      if (!el) return;
+      // текущий момент по серверу (UTC), сдвинутый на пояс склада
+      const d = new Date(Date.now() + serverClockDelta + serverTzOffsetH * 3600000);
+      const p = n => String(n).padStart(2, '0');
+      el.textContent = `🕒 ${p(d.getUTCDate())}.${p(d.getUTCMonth() + 1)}.${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+    }
+
     (async function checkAuth() {
       try {
         const res = await fetch('/api/manager/me', { credentials: 'include' });
@@ -5519,6 +5553,7 @@
           document.getElementById('dashboardView').style.display = 'block';
           document.getElementById('usernameDisplay').textContent = [data.firstName, data.lastName].filter(Boolean).join(' ') || data.username;
           applyAdminVisibility(!!data.isAdmin);
+        initServerClock();
           initFilters();
           await loadWarehouseFilter();
           loadSlots();

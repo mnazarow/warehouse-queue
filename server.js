@@ -1077,9 +1077,10 @@ app.post('/api/manager/slots/:id/complete', requireManager, (req, res) => {
   if (!slot) {
     return res.status(404).json({ error: 'Slot not found' });
   }
-  if (!slot.assembling) {
-    return res.status(400).json({ error: 'Slot must be in assembly first' });
+  if (!slot.is_booked) {
+    return res.status(400).json({ error: 'Slot is not booked' });
   }
+  // Менеджер может завершить заказ в любой момент (не обязательно из «На сборке»).
   db.prepare("UPDATE slots SET completed = 1, completed_at = datetime('now') WHERE id = ?").run(id);
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Завершён', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date, Number(id), getIp(req), getUserAgent(req));
   sendSms(slot.customer_phone, 'Ваш заказ собран, обратитесь к сотруднику склада за его получением.');
