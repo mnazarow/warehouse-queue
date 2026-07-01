@@ -5317,8 +5317,9 @@
     }
 
     // Кнопка отправки SMS на извлечённый номер (менеджер/инженер).
+    // Внутри onclick — одинарные кавычки (атрибут в двойных), иначе он «рвётся».
     function smsBtn(slotId, label, phone) {
-      return '<button class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:1px 6px;margin-left:6px" title="Отправить SMS: ' + label + ' (' + phone + ')" onclick="event.stopPropagation();openMessageModal(' + slotId + ', ' + JSON.stringify(label) + ', ' + JSON.stringify(phone) + ')">✉ ' + label.toLowerCase() + '</button>';
+      return '<button type="button" class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:1px 6px;margin-left:6px" title="Отправить SMS: ' + label + ' (' + phone + ')" onclick="event.stopPropagation();openMessageModal(' + slotId + ", '" + label + "', '" + phone + "')\">✉ " + label.toLowerCase() + '</button>';
     }
 
     function openMessageModal(id, customerName, customerPhone) {
