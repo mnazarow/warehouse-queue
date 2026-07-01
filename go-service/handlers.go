@@ -76,6 +76,8 @@ func apiRouter(w http.ResponseWriter, r *http.Request) {
 	// ---- manager slots ----
 	case p == "/api/manager/slots" && m == "GET":
 		hManagerSlots(w, r)
+	case len(seg) == 5 && seg[1] == "manager" && seg[2] == "slots" && seg[4] == "send-message" && m == "POST":
+		hSendMessage(w, r, seg[3])
 	case len(seg) == 5 && seg[1] == "manager" && seg[2] == "slots" && m == "POST":
 		hSlotAction(w, r, seg[3], seg[4])
 
@@ -326,6 +328,44 @@ func hBook(w http.ResponseWriter, r *http.Request, idStr string) {
 	cacheDelPattern("slots:public:" + date + ":*")
 	sendSMS(phone, fmt.Sprintf("Вы записаны на %s %s", date, ts))
 	writeJSON(w, 200, map[string]any{"success": true})
+}
+
+func cleanPhone(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		if c == '+' || (c >= '0' && c <= '9') {
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
+}
+
+// hSendMessage отправляет SMS по заявке: на явно переданный номер (менеджер/инженер)
+// либо на телефон клиента заявки.
+func hSendMessage(w http.ResponseWriter, r *http.Request, idStr string) {
+	if _, ok := requireManager(w, r); !ok {
+		return
+	}
+	b := body(r)
+	msg := strings.TrimSpace(bstr(b, "message"))
+	if msg == "" {
+		writeJSON(w, 400, map[string]any{"error": "Сообщение не может быть пустым"})
+		return
+	}
+	id, _ := strconv.Atoi(idStr)
+	var custPtr *string
+	db.row("SELECT customer_phone FROM slots WHERE id=?", id).Scan(&custPtr)
+	target := cleanPhone(bstr(b, "phone"))
+	if target == "" && custPtr != nil {
+		target = *custPtr
+	}
+	if target == "" {
+		writeJSON(w, 400, map[string]any{"error": "Нет номера телефона для отправки"})
+		return
+	}
+	sendSMS(target, msg)
+	db.ex("INSERT INTO messages (slot_id, phone, message, created_at) VALUES (?, ?, ?, ?)", id, target, msg, nowTS())
+	writeJSON(w, 200, map[string]any{"success": true, "phone": target})
 }
 
 func hVisit(w http.ResponseWriter, r *http.Request) {

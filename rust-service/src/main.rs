@@ -694,6 +694,10 @@ fn send_sms(db: &mut Db, phone: &str, msg: &str) {
     let _ = ureq::get(&url).timeout(Duration::from_secs(10)).call();
 }
 
+fn clean_phone(s: &str) -> String {
+    s.chars().filter(|c| *c == '+' || c.is_ascii_digit()).collect()
+}
+
 // ---------------------------------------------------------------------------
 // backups
 // ---------------------------------------------------------------------------
@@ -1236,6 +1240,30 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
 
     if p == "/api/manager/slots" && m == "GET" {
         return h_manager_slots(db, ctx);
+    }
+    if seg.len() == 5 && seg[1] == "manager" && seg[2] == "slots" && seg[4] == "send-message" && m == "POST" {
+        let msg = bstr(&ctx.body, "message");
+        if msg.is_empty() {
+            return Resp::err(400, "Сообщение не может быть пустым");
+        }
+        let id: i64 = seg[3].parse().unwrap_or(0);
+        let cust = db
+            .query_one("SELECT customer_phone FROM slots WHERE id=?", &[json!(id)])
+            .and_then(|m| m.get("customer_phone").and_then(|v| v.as_str().map(|s| s.to_string())))
+            .unwrap_or_default();
+        let mut target = clean_phone(&bstr(&ctx.body, "phone"));
+        if target.is_empty() {
+            target = cust;
+        }
+        if target.is_empty() {
+            return Resp::err(400, "Нет номера телефона для отправки");
+        }
+        send_sms(db, &target, &msg);
+        db.exec(
+            "INSERT INTO messages (slot_id, phone, message, created_at) VALUES (?, ?, ?, ?)",
+            &[json!(id), json!(target), json!(msg), json!(now_ts())],
+        );
+        return Resp::json(200, json!({"success": true, "phone": target}));
     }
     if seg.len() == 5 && seg[1] == "manager" && seg[2] == "slots" && m == "POST" {
         return h_slot_action(db, ctx, seg[3], seg[4]);

@@ -1549,7 +1549,7 @@ app.post('/api/integration/1c/orders/:id/status', require1cToken, (req, res) => 
 
 app.post('/api/manager/slots/:id/send-message', requireManager, (req, res) => {
   const { id } = req.params;
-  const { message } = req.body;
+  const { message, phone } = req.body;
   if (!message || !message.trim()) {
     return res.status(400).json({ error: 'Сообщение не может быть пустым' });
   }
@@ -1557,13 +1557,16 @@ app.post('/api/manager/slots/:id/send-message', requireManager, (req, res) => {
   if (!slot) {
     return res.status(404).json({ error: 'Slot not found' });
   }
-  if (!slot.customer_phone) {
-    return res.status(400).json({ error: 'У заявки нет номера телефона' });
+  // Целевой номер: явно переданный (менеджер/инженер) либо телефон клиента заявки.
+  const explicit = (typeof phone === 'string') ? phone.replace(/[^\d+]/g, '') : '';
+  const target = explicit || (slot.customer_phone || '');
+  if (!target) {
+    return res.status(400).json({ error: 'Нет номера телефона для отправки' });
   }
-  sendSms(slot.customer_phone, message.trim());
-  db.prepare('INSERT INTO messages (slot_id, phone, message, manager_id) VALUES (?, ?, ?, ?)').run(id, slot.customer_phone, message.trim(), req.session.managerId);
+  sendSms(target, message.trim());
+  db.prepare('INSERT INTO messages (slot_id, phone, message, manager_id) VALUES (?, ?, ?, ?)').run(id, target, message.trim(), req.session.managerId);
   redisFlushByPrefix('messages');
-  res.json({ success: true, phone: slot.customer_phone });
+  res.json({ success: true, phone: target });
 });
 
 app.get('/api/manager/messages', requireManager, async (req, res) => {

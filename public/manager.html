@@ -1927,7 +1927,7 @@
           <td>${escapeHtml(s.load_type_name) || '—'}</td>
           <td class="col-name">${escapeHtml(s.customer_name) || '—'}</td>
           <td class="col-phone">${escapeHtml(s.customer_phone) || '—'}</td>
-          <td class="col-account">${accounts.length ? accounts.map(function(a, i) { var info = ''; if (a.engineerName || a.managerName) { info += '<span style="font-size:0.75rem;color:#718096;margin-left:4px">(' + (escapeHtml(a.managerName) || '—') + ' / ' + (escapeHtml(a.engineerName) || '—') + ')</span>'; } if (a.comment) { info += '<span style="font-size:0.75rem;color:#2b6cb0;margin-left:4px">Комментарий: ' + escapeHtml(a.comment) + '</span>'; } if (a.notReadyReason) { info += '<span style="font-size:0.75rem;color:#e53e3e;margin-left:4px">Причина: ' + escapeHtml(a.notReadyReason) + '</span>'; } else if (Number(a.readyStatus) === 1) { info += '<span style="font-size:0.75rem;color:#38a169;font-weight:600;margin-left:4px">✓ Готов к отгрузке</span>'; } return '<div style="margin-bottom:2px"><button class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:1px 6px;margin-right:4px" onclick="toggleAccountNomRow(' + s.id + ', ' + i + ', this)">+</button>' + escapeHtml(a.accountNumber) + info + '</div>'; }).join('') : '—'}</td>
+          <td class="col-account">${accounts.length ? accounts.map(function(a, i) { var info = ''; if (a.engineerName || a.managerName) { info += '<span style="font-size:0.75rem;color:#718096;margin-left:4px">(' + (escapeHtml(a.managerName) || '—') + ' / ' + (escapeHtml(a.engineerName) || '—') + ')</span>'; var __mp = extractPhone(a.managerName); if (__mp) { info += smsBtn(s.id, 'Менеджер', __mp); } var __ep = extractPhone(a.engineerName); if (__ep) { info += smsBtn(s.id, 'Инженер', __ep); } } if (a.comment) { info += '<span style="font-size:0.75rem;color:#2b6cb0;margin-left:4px">Комментарий: ' + escapeHtml(a.comment) + '</span>'; } if (a.notReadyReason) { info += '<span style="font-size:0.75rem;color:#e53e3e;margin-left:4px">Причина: ' + escapeHtml(a.notReadyReason) + '</span>'; } else if (Number(a.readyStatus) === 1) { info += '<span style="font-size:0.75rem;color:#38a169;font-weight:600;margin-left:4px">✓ Готов к отгрузке</span>'; } return '<div style="margin-bottom:2px"><button class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:1px 6px;margin-right:4px" onclick="toggleAccountNomRow(' + s.id + ', ' + i + ', this)">+</button>' + escapeHtml(a.accountNumber) + info + '</div>'; }).join('') : '—'}</td>
           <td class="col-org">${escapeHtml(s.customer_organization) || '—'}</td>
           <td class="col-comment" style="white-space:pre-wrap">${escapeHtml(s.customer_comment) || '—'}</td>
           <td class="col-actions">${actions}</td>
@@ -5303,9 +5303,27 @@
     }
 
     let messageSlotId = null;
+    let messagePhone = '';
+
+    // Извлекает телефон, «зашитый» в имя менеджера/инженера из данных 1С.
+    function extractPhone(name) {
+      if (!name) return '';
+      const m = String(name).match(/\+?\d[\d\s\-()]{8,}\d/);
+      if (!m) return '';
+      let d = m[0].replace(/\D/g, '');
+      if (d.length === 11 && d[0] === '8') d = '7' + d.slice(1);
+      else if (d.length === 10) d = '7' + d;
+      return d.length >= 10 ? d : '';
+    }
+
+    // Кнопка отправки SMS на извлечённый номер (менеджер/инженер).
+    function smsBtn(slotId, label, phone) {
+      return '<button class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:1px 6px;margin-left:6px" title="Отправить SMS: ' + label + ' (' + phone + ')" onclick="event.stopPropagation();openMessageModal(' + slotId + ', ' + JSON.stringify(label) + ', ' + JSON.stringify(phone) + ')">✉ ' + label.toLowerCase() + '</button>';
+    }
 
     function openMessageModal(id, customerName, customerPhone) {
       messageSlotId = id;
+      messagePhone = customerPhone || '';
       document.getElementById('messageRecipient').textContent = `${customerName || '—'} (${customerPhone})`;
       document.getElementById('messageText').value = '';
       document.getElementById('messageError').style.display = 'none';
@@ -5335,7 +5353,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ message })
+          body: JSON.stringify({ message, phone: messagePhone })
         });
         const data = await res.json();
         if (!data.success) {
