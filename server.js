@@ -2898,6 +2898,23 @@ app.post('/api/manager/settings/privacy-policy', requireManager, (req, res) => {
   res.json({ success: true });
 });
 
+// Информационное сообщение на странице записи (показывается всем посетителям).
+app.get('/api/public/booking-message', (req, res) => {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'booking_page_message'").get();
+  res.json({ text: row ? row.value : '' });
+});
+
+app.get('/api/manager/settings/booking-message', requireManager, (req, res) => {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'booking_page_message'").get();
+  res.json({ text: row ? row.value : '' });
+});
+
+app.post('/api/manager/settings/booking-message', requireManager, (req, res) => {
+  const text = (req.body && typeof req.body.text === 'string') ? req.body.text : '';
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('booking_page_message', ?)").run(text);
+  res.json({ success: true });
+});
+
 app.get('/api/manager/settings/work-on-weekends', requireManager, (req, res) => {
   const setting = db.prepare("SELECT value FROM settings WHERE key = 'work_on_weekends'").get();
   res.json({ enabled: setting ? setting.value === '1' : false });

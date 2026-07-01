@@ -1141,6 +1141,16 @@
       </div>
 
       <div class="section-header">
+        <h2>Сообщение на странице записи</h2>
+      </div>
+      <div style="max-width:760px;margin-bottom:18px">
+        <p style="font-size:0.85rem;color:#718096;margin:0 0 8px">Показывается вверху страницы записи всем посетителям. Оставьте пустым, чтобы скрыть.</p>
+        <textarea id="bookingMsgText" rows="4" style="width:100%;padding:10px 12px;border:1px solid #cbd5e0;border-radius:8px;font-size:0.9rem;font-family:inherit;resize:vertical" placeholder="Например: 30 декабря склад работает до 15:00..."></textarea>
+        <div style="margin-top:8px"><button class="btn btn-primary" onclick="saveBookingMessage()">Сохранить</button></div>
+        <div id="bookingMsgStatus" style="margin-top:10px;display:none;font-size:0.85rem;color:#38a169"></div>
+      </div>
+
+      <div class="section-header">
         <h2>Политика обработки персональных данных</h2>
       </div>
       <div style="max-width:760px;margin-bottom:18px">
@@ -2201,7 +2211,7 @@
       if (name === 'bannedphones') loadBannedPhones();
       if (name === 'bannedips') loadBannedIps();
       if (name === 'vehicleclasses') { loadVehicleClasses(); loadLoadTypes(); }
-      if (name === 'settings') { loadAbout(); loadSettings(); loadAutobackup(); loadAnalytics('visits'); loadAnalytics('bookings'); loadDevices(); loadPrivacy(); loadCookiePolicy(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
+      if (name === 'settings') { loadAbout(); loadSettings(); loadAutobackup(); loadAnalytics('visits'); loadAnalytics('bookings'); loadDevices(); loadPrivacy(); loadCookiePolicy(); loadBookingMessage(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
     }
 
     let aboutTimer = null;
@@ -2310,6 +2320,26 @@
         const res = await fetch('/api/manager/settings/privacy-policy', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           credentials: 'include', body: JSON.stringify({ text: document.getElementById('privacyText').value })
+        });
+        const d = await res.json();
+        if (!res.ok || !d.success) throw new Error(d.error || 'Ошибка');
+        msg.style.color = '#38a169'; msg.textContent = 'Сохранено'; msg.style.display = 'block';
+        setTimeout(() => { msg.style.display = 'none'; }, 3000);
+      } catch (e) { msg.style.color = '#e53e3e'; msg.textContent = 'Ошибка: ' + e.message; msg.style.display = 'block'; }
+    }
+
+    async function loadBookingMessage() {
+      try {
+        const res = await fetch('/api/manager/settings/booking-message', { credentials: 'include' });
+        if (res.ok) { const d = await res.json(); document.getElementById('bookingMsgText').value = d.text || ''; }
+      } catch {}
+    }
+    async function saveBookingMessage() {
+      const msg = document.getElementById('bookingMsgStatus');
+      try {
+        const res = await fetch('/api/manager/settings/booking-message', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', body: JSON.stringify({ text: document.getElementById('bookingMsgText').value })
         });
         const d = await res.json();
         if (!res.ok || !d.success) throw new Error(d.error || 'Ошибка');

@@ -94,6 +94,7 @@
     <img src="/logo.png" alt="Логотип" class="logo">
     <h1>Онлайн-запись на склад</h1>
     <p class="subtitle">Выберите дату и время для визита. Работаем в будние дни с 9:00 до 17:30.</p>
+    <div id="bookingMessageBanner" style="display:none;margin:0 0 16px;padding:12px 16px;background:#ebf8ff;border:1px solid #90cdf4;border-left:4px solid #3182ce;border-radius:8px;color:#2c5282;font-size:0.95rem;line-height:1.5;white-space:pre-wrap"></div>
 
     <div class="tabs">
       <button class="tab active" data-type="small">До 3-х товаров в накладной (15 мин)</button>
@@ -640,9 +641,20 @@
       this.value = m;
     });
 
+    async function loadBookingMessage() {
+      try {
+        const res = await fetch('/api/public/booking-message');
+        const d = await res.json();
+        const el = document.getElementById('bookingMessageBanner');
+        if (d && d.text && d.text.trim()) { el.textContent = d.text; el.style.display = 'block'; }
+        else { el.style.display = 'none'; }
+      } catch (e) {}
+    }
+
     initDate();
     loadWarehouses();
     loadAllowNoAccount();
+    loadBookingMessage();
     setInterval(loadSlots, 30000);
     try { fetch('/api/visit', { method: 'POST' }).catch(function(){}); } catch (e) {}
     initCookieBanner();

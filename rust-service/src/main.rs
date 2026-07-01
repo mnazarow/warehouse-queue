@@ -1165,6 +1165,9 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
     if p == "/api/public/cookie-policy" && m == "GET" {
         return Resp::json(200, json!({"text": db.get_setting("cookie_policy_text","")}));
     }
+    if p == "/api/public/booking-message" && m == "GET" {
+        return Resp::json(200, json!({"text": db.get_setting("booking_page_message","")}));
+    }
     if p == "/api/public/vehicle-classes" && m == "GET" {
         let rows = db.query_maps("SELECT id, name, description FROM vehicle_classes ORDER BY name", &[]);
         return Resp::json(200, json!({ "classes": rows }));
@@ -1253,6 +1256,9 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
     }
     if p == "/api/manager/settings/cookie-policy" {
         return h_text(db, mid, ctx, "cookie_policy_text");
+    }
+    if p == "/api/manager/settings/booking-message" {
+        return h_text(db, mid, ctx, "booking_page_message");
     }
 
     // ---- managers CRUD (admin) ----

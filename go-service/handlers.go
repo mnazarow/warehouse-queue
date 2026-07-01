@@ -62,6 +62,8 @@ func apiRouter(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"text": db.getSetting("privacy_policy_text", "")})
 	case p == "/api/public/cookie-policy" && m == "GET":
 		writeJSON(w, 200, map[string]any{"text": db.getSetting("cookie_policy_text", "")})
+	case p == "/api/public/booking-message" && m == "GET":
+		writeJSON(w, 200, map[string]any{"text": db.getSetting("booking_page_message", "")})
 
 	// ---- manager auth ----
 	case p == "/api/manager/login" && m == "POST":
@@ -88,6 +90,8 @@ func apiRouter(w http.ResponseWriter, r *http.Request) {
 		hTextSetting(w, r, "privacy_policy_text")
 	case p == "/api/manager/settings/cookie-policy":
 		hTextSetting(w, r, "cookie_policy_text")
+	case p == "/api/manager/settings/booking-message":
+		hTextSetting(w, r, "booking_page_message")
 
 	// ---- managers CRUD (admin) ----
 	case p == "/api/manager/list" && m == "GET":
