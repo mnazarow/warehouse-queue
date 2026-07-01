@@ -27,6 +27,15 @@ func appLoc() *time.Location {
 	return time.FixedZone("APP", appTzOffsetHours()*3600)
 }
 
+// bookingMaxDays — за сколько дней вперёд можно записаться (настройка → env → 14).
+func bookingMaxDays() int {
+	n := atoiDef(db.getSetting("booking_max_days", env("BOOKING_MAX_DAYS", "14")), 14)
+	if n <= 0 {
+		n = 14
+	}
+	return n
+}
+
 // apiRouter dispatches all /api/* requests.
 func apiRouter(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
@@ -225,8 +234,8 @@ func hPublicSlots(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	minTime := now.Add(time.Hour)             // свободен только если старт >= чем через час
-	maxTime := now.Add(14 * 24 * time.Hour)   // и не дальше 2 недель
+	minTime := now.Add(time.Hour)                                          // свободен только если старт >= чем через час
+	maxTime := now.Add(time.Duration(bookingMaxDays()) * 24 * time.Hour)   // и не дальше настроенного числа дней
 	out := []map[string]any{}
 	for _, m := range raw {
 		d := fmt.Sprintf("%v", m["date"])
@@ -296,8 +305,8 @@ func hBook(w http.ResponseWriter, r *http.Request, idStr string) {
 		writeJSON(w, 400, map[string]any{"error": "Слот можно забронировать минимум за 1 час"})
 		return
 	}
-	if sd.After(time.Now().Add(14 * 24 * time.Hour)) {
-		writeJSON(w, 400, map[string]any{"error": "Нельзя записаться на дату более 2 недель"})
+	if sd.After(time.Now().Add(time.Duration(bookingMaxDays()) * 24 * time.Hour)) {
+		writeJSON(w, 400, map[string]any{"error": fmt.Sprintf("Нельзя записаться на дату дальше %d дн. от текущей", bookingMaxDays())})
 		return
 	}
 	res, err := db.ex("UPDATE slots SET is_booked=1, customer_name=?, customer_phone=?, customer_account=?, customer_comment=?, customer_organization=?, booked_at=?, customer_ip=?, customer_user_agent=?, vehicle_class_id=?, load_type_id=? WHERE id=? AND is_booked=0",

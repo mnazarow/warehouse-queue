@@ -274,6 +274,19 @@ fn is_weekday(date: &str) -> bool {
 
 // Часовой пояс склада (по умолчанию UTC+3, Москва), не зависящий от таймзоны
 // сервера. Настройка: TZ_OFFSET_HOURS.
+// За сколько дней вперёд можно записаться (настройка → env → 14).
+fn booking_max_days(db: &mut Db) -> i64 {
+    let n = db
+        .get_setting("booking_max_days", &env("BOOKING_MAX_DAYS", "14"))
+        .parse::<i64>()
+        .unwrap_or(14);
+    if n <= 0 {
+        14
+    } else {
+        n
+    }
+}
+
 // Приоритет: настройка в кабинете (tz_offset_hours) → TZ_OFFSET_HOURS → 3 (Москва).
 fn app_offset_secs(db: &mut Db) -> i32 {
     db.get_setting("tz_offset_hours", &env("TZ_OFFSET_HOURS", "3"))
@@ -1647,6 +1660,24 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
         db.set_setting("tz_offset_hours", &h.to_string());
         return Resp::ok();
     }
+    if p == "/api/manager/settings/booking-days" && m == "GET" {
+        return Resp::json(200, json!({ "days": booking_max_days(db) }));
+    }
+    if p == "/api/manager/settings/booking-days" && m == "POST" {
+        if !is_admin(db, mid) {
+            return Resp::err(403, "Доступ только для администраторов");
+        }
+        let n = ctx
+            .body
+            .get("days")
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .unwrap_or(14);
+        if n < 1 || n > 365 {
+            return Resp::err(400, "Недопустимое число дней (от 1 до 365)");
+        }
+        db.set_setting("booking_max_days", &n.to_string());
+        return Resp::ok();
+    }
     if p == "/api/manager/settings/1c/allow-booking-without-account" && m == "POST" {
         return save_bool(db, mid, ctx, "allow_booking_without_account", "allow");
     }
@@ -1872,9 +1903,10 @@ fn h_public_slots(db: &mut Db, ctx: &Ctx) -> Resp {
     };
 
     let offset = app_offset_secs(db);
+    let max_days = booking_max_days(db);
     let now = Utc::now();
     let min_t = now + CDur::hours(1); // свободен только если старт >= чем через час
-    let max_t = now + CDur::days(14); // и не дальше 2 недель
+    let max_t = now + CDur::days(max_days); // и не дальше настроенного числа дней
     let mut out = vec![];
     for m in &raw {
         let d = m.get("date").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1929,13 +1961,14 @@ fn h_book(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx, id_st
         return Resp::err(409, "Slot already booked");
     }
     let offset = app_offset_secs(db);
+    let max_days = booking_max_days(db);
     if let Some(sd) = slot_dt(&date, &ts, offset) {
         let now = Utc::now();
         if sd < now + CDur::hours(1) {
             return Resp::err(400, "Слот можно забронировать минимум за 1 час");
         }
-        if sd > now + CDur::days(14) {
-            return Resp::err(400, "Нельзя записаться на дату более 2 недель");
+        if sd > now + CDur::days(max_days) {
+            return Resp::json(400, json!({"error": format!("Нельзя записаться на дату дальше {max_days} дн. от текущей")}));
         }
     }
     let comment = bstr(&ctx.body, "comment");

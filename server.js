@@ -43,6 +43,19 @@ function slotInstantMs(date, timeStart) {
   const ms = Date.parse(`${date}T${timeStart}:00Z`);
   return Number.isNaN(ms) ? NaN : ms - appTzOffsetHours() * 3600000;
 }
+
+// За сколько дней вперёд можно записаться (настройка booking_max_days → env → 14).
+function bookingMaxDays() {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'booking_max_days'").get();
+    if (row && row.value !== '' && row.value !== null) {
+      const n = parseInt(row.value, 10);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch (e) {}
+  const envN = parseInt(process.env.BOOKING_MAX_DAYS, 10);
+  return (Number.isFinite(envN) && envN > 0) ? envN : 14;
+}
 // Behind a reverse proxy (nginx) trust X-Forwarded-* so req.ip is the real
 // client address (used by the allowed-IP checks). Configurable via TRUST_PROXY.
 if (process.env.TRUST_PROXY) {
@@ -675,7 +688,7 @@ app.get('/api/slots', async (req, res) => {
   // "past" depends on the current time, so it is always computed fresh,
   // never served from cache.
   const minMs = Date.now() + 3600000;
-  const maxMs = Date.now() + 1209600000;
+  const maxMs = Date.now() + bookingMaxDays() * 86400000;
   const enriched = slots.map(s => {
     const inst = slotInstantMs(s.date, s.time_start);
     return {
@@ -852,8 +865,8 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   if (slotMs <= Date.now() + 3600000) {
     return res.status(400).json({ error: 'Слот можно забронировать минимум за 1 час' });
   }
-  if (slotMs > Date.now() + 1209600000) {
-    return res.status(400).json({ error: 'Нельзя записаться на дату более 2 недель от текущей' });
+  if (slotMs > Date.now() + bookingMaxDays() * 86400000) {
+    return res.status(400).json({ error: 'Нельзя записаться на дату дальше ' + bookingMaxDays() + ' дн. от текущей' });
   }
   // Conditional update guards against the double-booking race: only one
   // concurrent request can flip is_booked 0 -> 1.
@@ -1163,6 +1176,19 @@ app.post('/api/manager/settings/timezone', requireManager, (req, res) => {
     return res.status(400).json({ error: 'Недопустимое смещение (от -12 до 14)' });
   }
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('tz_offset_hours', ?)").run(String(h));
+  res.json({ success: true });
+});
+
+app.get('/api/manager/settings/booking-days', requireManager, (req, res) => {
+  res.json({ days: bookingMaxDays() });
+});
+
+app.post('/api/manager/settings/booking-days', requireManager, (req, res) => {
+  const n = parseInt(req.body.days, 10);
+  if (!Number.isFinite(n) || n < 1 || n > 365) {
+    return res.status(400).json({ error: 'Недопустимое число дней (от 1 до 365)' });
+  }
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('booking_max_days', ?)").run(String(n));
   res.json({ success: true });
 });
 

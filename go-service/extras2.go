@@ -71,6 +71,24 @@ func extras2Router(w http.ResponseWriter, r *http.Request, p, m string, seg []st
 		}
 		db.setSetting("tz_offset_hours", strconv.Itoa(h))
 		ok200(w)
+
+	// ---- за сколько дней можно записаться ----
+	case p == "/api/manager/settings/booking-days" && m == "GET":
+		if _, ok := requireManager(w, r); !ok {
+			return true
+		}
+		writeJSON(w, 200, map[string]any{"days": bookingMaxDays()})
+	case p == "/api/manager/settings/booking-days" && m == "POST":
+		if _, ok := requireAdmin(w, r); !ok {
+			return true
+		}
+		n := atoiDef(bstr(body(r), "days"), 14)
+		if n < 1 || n > 365 {
+			writeJSON(w, 400, map[string]any{"error": "Недопустимое число дней (от 1 до 365)"})
+			return true
+		}
+		db.setSetting("booking_max_days", strconv.Itoa(n))
+		ok200(w)
 	case p == "/api/manager/settings/1c/allow-booking-without-account" && m == "POST":
 		saveBoolSetting(w, r, "allow_booking_without_account", "allow")
 	case p == "/api/manager/settings/1c/allow-booking-with-invalid-account" && m == "POST":

@@ -832,6 +832,16 @@
           </div>
           <div id="tzStatus" style="color:#38a169;margin-top:8px;display:none"></div>
         </div>
+
+        <div class="form-group" style="margin-bottom:16px">
+          <label>За сколько дней вперёд можно записаться</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="settingsBookingDays" min="1" max="365" step="1" style="width:120px" placeholder="14">
+            <button class="btn btn-primary" onclick="saveBookingDays()" style="white-space:nowrap">Сохранить</button>
+            <span style="color:#718096;font-size:0.82rem">Максимальная дата записи от сегодня (по умолчанию 14).</span>
+          </div>
+          <div id="bookingDaysStatus" style="color:#38a169;margin-top:8px;display:none"></div>
+        </div>
         <div class="form-group" style="margin-bottom:16px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
             <input type="checkbox" id="settingsMascot" style="width:18px;height:18px;cursor:pointer" onchange="saveSettingsMascot()">
@@ -2550,7 +2560,34 @@
         const tzRes = await fetch('/api/manager/settings/timezone', { credentials: 'include' });
         const tzData = await tzRes.json();
         document.getElementById('settingsTzOffset').value = (tzData.offsetHours !== undefined && tzData.offsetHours !== null) ? tzData.offsetHours : 3;
+
+        const bdRes = await fetch('/api/manager/settings/booking-days', { credentials: 'include' });
+        const bdData = await bdRes.json();
+        document.getElementById('settingsBookingDays').value = (bdData.days !== undefined && bdData.days !== null) ? bdData.days : 14;
       } catch {}
+    }
+
+    async function saveBookingDays() {
+      const days = parseInt(document.getElementById('settingsBookingDays').value, 10);
+      const status = document.getElementById('bookingDaysStatus');
+      try {
+        const res = await fetch('/api/manager/settings/booking-days', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ days })
+        });
+        const data = await res.json();
+        if (data.success) {
+          status.textContent = 'Сохранено';
+          status.style.color = '#38a169';
+        } else {
+          status.textContent = data.error || 'Ошибка';
+          status.style.color = '#e53e3e';
+        }
+        status.style.display = 'block';
+        setTimeout(() => status.style.display = 'none', 3000);
+      } catch { alert('Ошибка сети'); }
     }
 
     async function saveTimezone() {
