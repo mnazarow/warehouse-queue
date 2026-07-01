@@ -1621,7 +1621,7 @@
     <div class="modal" style="max-width:500px">
       <h2>Отправка сообщения</h2>
       <p style="color:#4a5568;margin:0 0 4px 0;font-size:0.9rem">
-        Клиент: <strong id="messageRecipient"></strong>
+        Адресат: <strong id="messageRecipient"></strong>
       </p>
       <div class="form-group">
         <label>Сообщение</label>
@@ -1927,7 +1927,7 @@
           <td>${escapeHtml(s.load_type_name) || '—'}</td>
           <td class="col-name">${escapeHtml(s.customer_name) || '—'}</td>
           <td class="col-phone">${escapeHtml(s.customer_phone) || '—'}</td>
-          <td class="col-account">${accounts.length ? accounts.map(function(a, i) { var info = ''; if (a.engineerName || a.managerName) { info += '<span style="font-size:0.75rem;color:#718096;margin-left:4px">(' + (escapeHtml(a.managerName) || '—') + ' / ' + (escapeHtml(a.engineerName) || '—') + ')</span>'; var __mp = extractPhone(a.managerName); if (__mp) { info += smsBtn(s.id, 'Менеджер', __mp); } var __ep = extractPhone(a.engineerName); if (__ep) { info += smsBtn(s.id, 'Инженер', __ep); } } if (a.comment) { info += '<span style="font-size:0.75rem;color:#2b6cb0;margin-left:4px">Комментарий: ' + escapeHtml(a.comment) + '</span>'; } if (a.notReadyReason) { info += '<span style="font-size:0.75rem;color:#e53e3e;margin-left:4px">Причина: ' + escapeHtml(a.notReadyReason) + '</span>'; } else if (Number(a.readyStatus) === 1) { info += '<span style="font-size:0.75rem;color:#38a169;font-weight:600;margin-left:4px">✓ Готов к отгрузке</span>'; } return '<div style="margin-bottom:2px"><button class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:1px 6px;margin-right:4px" onclick="toggleAccountNomRow(' + s.id + ', ' + i + ', this)">+</button>' + escapeHtml(a.accountNumber) + info + '</div>'; }).join('') : '—'}</td>
+          <td class="col-account">${accounts.length ? accounts.map(function(a, i) { var info = ''; if (a.engineerName || a.managerName) { info += '<span style="font-size:0.75rem;color:#718096;margin-left:4px">(' + (escapeHtml(a.managerName) || '—') + ' / ' + (escapeHtml(a.engineerName) || '—') + ')</span>'; var __mp = extractPhone(a.managerName); if (__mp) { info += smsBtn(s.id, i, 'manager', 'менеджеру'); } var __ep = extractPhone(a.engineerName); if (__ep) { info += smsBtn(s.id, i, 'engineer', 'инженеру'); } } if (a.comment) { info += '<span style="font-size:0.75rem;color:#2b6cb0;margin-left:4px">Комментарий: ' + escapeHtml(a.comment) + '</span>'; } if (a.notReadyReason) { info += '<span style="font-size:0.75rem;color:#e53e3e;margin-left:4px">Причина: ' + escapeHtml(a.notReadyReason) + '</span>'; } else if (Number(a.readyStatus) === 1) { info += '<span style="font-size:0.75rem;color:#38a169;font-weight:600;margin-left:4px">✓ Готов к отгрузке</span>'; } return '<div style="margin-bottom:2px"><button class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:1px 6px;margin-right:4px" onclick="toggleAccountNomRow(' + s.id + ', ' + i + ', this)">+</button>' + escapeHtml(a.accountNumber) + info + '</div>'; }).join('') : '—'}</td>
           <td class="col-org">${escapeHtml(s.customer_organization) || '—'}</td>
           <td class="col-comment" style="white-space:pre-wrap">${escapeHtml(s.customer_comment) || '—'}</td>
           <td class="col-actions">${actions}</td>
@@ -5316,17 +5316,32 @@
       return d.length >= 10 ? d : '';
     }
 
-    // Кнопка отправки SMS на извлечённый номер (менеджер/инженер).
-    // Внутри onclick — одинарные кавычки (атрибут в двойных), иначе он «рвётся».
-    function smsBtn(slotId, label, phone) {
-      return '<button type="button" class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:1px 6px;margin-left:6px" title="Отправить SMS: ' + label + ' (' + phone + ')" onclick="event.stopPropagation();openMessageModal(' + slotId + ", '" + label + "', '" + phone + "')\">✉ " + label.toLowerCase() + '</button>';
+    // Кнопка отправки SMS менеджеру/инженеру. В onclick передаём только id слота,
+    // индекс счёта и роль (без имён/телефонов — чтобы не ломать атрибут кавычками).
+    function smsBtn(slotId, accIdx, role, label) {
+      return '<button type="button" class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:1px 6px;margin-left:6px" title="Отправить SMS ' + label + '" onclick="event.stopPropagation();smsToStaff(' + slotId + ', ' + accIdx + ", '" + role + "')\">✉ " + label + '</button>';
     }
 
-    function openMessageModal(id, customerName, customerPhone) {
+    // Собирает шаблон сообщения и открывает окно отправки для менеджера/инженера.
+    function smsToStaff(slotId, accIdx, role) {
+      const slots = window.__lastSlots || [];
+      const s = slots.find(function(x) { return x.id === slotId; });
+      if (!s) return;
+      const accounts = (s.accounts && s.accounts.length) ? s.accounts : [];
+      const a = accounts[accIdx];
+      if (!a) return;
+      const phone = extractPhone(role === 'engineer' ? a.engineerName : a.managerName);
+      if (!phone) { alert('Не удалось определить номер из имени'); return; }
+      const label = role === 'engineer' ? 'Инженер' : 'Менеджер';
+      const prefill = 'По счету ' + (a.accountNumber || '') + ' записался клиент ' + (s.customer_name || '') + ' и ' + (s.customer_phone || '') + ', но ';
+      openMessageModal(slotId, label, phone, prefill);
+    }
+
+    function openMessageModal(id, customerName, customerPhone, prefill) {
       messageSlotId = id;
       messagePhone = customerPhone || '';
       document.getElementById('messageRecipient').textContent = `${customerName || '—'} (${customerPhone})`;
-      document.getElementById('messageText').value = '';
+      document.getElementById('messageText').value = prefill || '';
       document.getElementById('messageError').style.display = 'none';
       document.getElementById('messageSuccess').style.display = 'none';
       document.getElementById('messageModal').classList.add('open');
