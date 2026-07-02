@@ -142,6 +142,13 @@ func (d *DB) initSchema() error {
 			return fmt.Errorf("schema: %w", err)
 		}
 	}
+	// Несколько складов у менеджера (миграция существующих БД). Ошибка «колонка
+	// уже есть» игнорируется.
+	if d.backend == "postgres" {
+		d.Exec("ALTER TABLE managers ADD COLUMN IF NOT EXISTS warehouse_ids TEXT DEFAULT ''")
+	} else {
+		d.Exec("ALTER TABLE managers ADD COLUMN warehouse_ids TEXT DEFAULT ''")
+	}
 	return nil
 }
 

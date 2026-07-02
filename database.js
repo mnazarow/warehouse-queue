@@ -157,6 +157,9 @@ function initDatabase() {
   if (!mgrColCheck.some(c => c.name === 'is_admin')) {
     db.exec("ALTER TABLE managers ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
   }
+  if (!mgrColCheck.some(c => c.name === 'warehouse_ids')) {
+    db.exec("ALTER TABLE managers ADD COLUMN warehouse_ids TEXT DEFAULT ''");
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS settings (

@@ -275,6 +275,13 @@ pub fn init_schema(db: &mut Db) -> Result<(), String> {
     for s in stmts {
         db.exec_batch(&s)?;
     }
+    // Несколько складов у менеджера (миграция существующих БД); ошибка «колонка
+    // уже есть» игнорируется.
+    if db.is_pg() {
+        let _ = db.exec_batch("ALTER TABLE managers ADD COLUMN IF NOT EXISTS warehouse_ids TEXT DEFAULT ''");
+    } else {
+        let _ = db.exec_batch("ALTER TABLE managers ADD COLUMN warehouse_ids TEXT DEFAULT ''");
+    }
     Ok(())
 }
 

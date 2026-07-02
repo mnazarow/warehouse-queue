@@ -450,10 +450,10 @@
           </select>
         </div>
         <div class="form-group">
-          <label>Склад</label>
-          <select id="filterWarehouse" onchange="loadSlots()">
-            <option value="">Все</option>
+          <label>Склады (можно несколько)</label>
+          <select id="filterWarehouse" multiple size="4" onchange="loadSlots()" style="min-width:160px">
           </select>
+          <div style="font-size:0.78rem;color:#718096;margin-top:2px">Ничего = все доступные</div>
         </div>
         <button class="btn btn-secondary" onclick="resetFilters()">Сбросить</button>
         <button class="btn btn-secondary" onclick="loadSlots()">Обновить</button>
@@ -1272,10 +1272,9 @@
         <input type="password" id="newManagerConfirm">
       </div>
       <div class="form-group">
-        <label>Склад</label>
-        <select id="newManagerWarehouse">
-          <option value="">Все склады</option>
-        </select>
+        <label>Склады (можно несколько)</label>
+        <select id="newManagerWarehouse" multiple size="5" style="width:100%"></select>
+        <div style="font-size:0.8rem;color:#718096;margin-top:4px">Удерживайте Ctrl/⌘ для выбора нескольких. Ничего не выбрано = все склады.</div>
       </div>
       <div class="form-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -1312,10 +1311,9 @@
         <input type="password" id="editManagerPassword" placeholder="Минимум 4 символа">
       </div>
       <div class="form-group">
-        <label>Склад</label>
-        <select id="editManagerWarehouse">
-          <option value="">Все склады</option>
-        </select>
+        <label>Склады (можно несколько)</label>
+        <select id="editManagerWarehouse" multiple size="5" style="width:100%"></select>
+        <div style="font-size:0.8rem;color:#718096;margin-top:4px">Удерживайте Ctrl/⌘ для выбора нескольких. Ничего не выбрано = все склады.</div>
       </div>
       <div class="form-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -1728,6 +1726,17 @@
     let isAuthenticated = false;
     let currentManagerId = null;
     let currentManagerWarehouseId = null;
+    let currentManagerWarehouseIds = [];
+    let currentIsAdmin = false;
+    // warehouse_ids может прийти массивом (Go/Rust /me) или CSV-строкой (список Node/Rust).
+    function parseWhIds(v) {
+      if (Array.isArray(v)) return v.map(Number).filter(Boolean);
+      if (typeof v === 'string' && v) return v.split(',').map(function(s) { return Number(s.trim()); }).filter(Boolean);
+      return [];
+    }
+    function selectedNums(sel) {
+      return Array.from(sel.selectedOptions).map(function(o) { return o.value; }).filter(Boolean);
+    }
 
     function escapeHtml(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
     function jsStr(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\r?\n/g,' ');}
@@ -1763,6 +1772,8 @@
         isAuthenticated = true;
         currentManagerId = data.id;
         currentManagerWarehouseId = data.warehouseId;
+        currentManagerWarehouseIds = parseWhIds(data.warehouseIds);
+        currentIsAdmin = !!data.isAdmin;
         if (document.getElementById('savePassword').checked) {
           localStorage.setItem('manager_username', username);
         } else {
@@ -1808,11 +1819,7 @@
       document.getElementById('filterType').value = '';
       document.getElementById('filterStatus').value = 'nonfree';
       const sel = document.getElementById('filterWarehouse');
-      for (const opt of sel.options) {
-        if (currentManagerWarehouseId && String(opt.value) === String(currentManagerWarehouseId)) {
-          opt.selected = true; break;
-        }
-      }
+      for (const opt of sel.options) opt.selected = false; // пусто = все доступные
       loadSlots();
     }
 
@@ -1821,11 +1828,11 @@
       container.innerHTML = '<p class="no-slots">Загрузка...</p>';
       const date = document.getElementById('filterDate').value;
       const type = document.getElementById('filterType').value;
-      const warehouseId = document.getElementById('filterWarehouse').value;
+      const warehouseIds = selectedNums(document.getElementById('filterWarehouse'));
       let url = '/api/manager/slots?';
       if (date) url += `date=${date}&`;
       if (type) url += `type=${type}&`;
-      if (warehouseId) url += `warehouse_id=${warehouseId}&`;
+      if (warehouseIds.length) url += `warehouse_id=${encodeURIComponent(warehouseIds.join(','))}&`;
       try {
         const res = await fetch(url, { credentials: 'include' });
         if (res.status === 401) {
@@ -3363,11 +3370,12 @@
         if (res.status !== 200) return;
         const data = await res.json();
         const sel = document.getElementById('filterWarehouse');
-        sel.innerHTML = '<option value="">Все склады</option>';
+        sel.innerHTML = '';
+        const restrict = !currentIsAdmin && currentManagerWarehouseIds.length > 0;
         for (const w of data.warehouses) {
+          if (restrict && currentManagerWarehouseIds.indexOf(w.id) === -1) continue;
           const opt = document.createElement('option');
           opt.value = w.id; opt.textContent = w.name;
-          if (currentManagerWarehouseId && w.id === currentManagerWarehouseId) opt.selected = true;
           sel.appendChild(opt);
         }
       } catch {}
@@ -3812,7 +3820,7 @@
       document.getElementById('newManagerPassword').value = '';
       document.getElementById('newManagerConfirm').value = '';
       document.getElementById('newManagerIsAdmin').checked = false;
-      document.getElementById('newManagerWarehouse').innerHTML = '<option value="">Все склады</option>';
+      document.getElementById('newManagerWarehouse').innerHTML = '';
       document.getElementById('createManagerError').style.display = 'none';
       document.getElementById('createManagerSuccess').style.display = 'none';
       document.getElementById('createManagerModal').classList.add('open');
@@ -3859,7 +3867,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ username, password, firstName, lastName, warehouseId: document.getElementById('newManagerWarehouse').value || null, isAdmin: document.getElementById('newManagerIsAdmin').checked })
+        body: JSON.stringify({ username, password, firstName, lastName, warehouseIds: selectedNums(document.getElementById('newManagerWarehouse')).map(Number), isAdmin: document.getElementById('newManagerIsAdmin').checked })
       });
       const data = await res.json();
       if (!data.success) {
@@ -3880,20 +3888,27 @@
 
     async function loadManagers() {
       try {
-        const res = await fetch('/api/manager/list', { credentials: 'include' });
+        const [res, wRes] = await Promise.all([
+          fetch('/api/manager/list', { credentials: 'include' }),
+          fetch('/api/manager/warehouses', { credentials: 'include' })
+        ]);
         if (res.status !== 200) return;
         const data = await res.json();
+        const whMap = {};
+        if (wRes.ok) { const wd = await wRes.json(); for (const w of (wd.warehouses || [])) whMap[w.id] = w.name; }
         const container = document.getElementById('managersList');
         if (!data.managers.length) {
           container.innerHTML = '<div class="empty-state">Нет менеджеров</div>';
           return;
         }
         let html = `<table id="managersTable"><thead><tr>
-          <th>ID</th><th>Имя</th><th>Фамилия</th><th>Логин</th><th>Склад</th><th>Админ</th><th>Действия</th>
+          <th>ID</th><th>Имя</th><th>Фамилия</th><th>Логин</th><th>Склады</th><th>Админ</th><th>Действия</th>
         </tr></thead><tbody>`;
         for (const m of data.managers) {
           const isSelf = m.id === currentManagerId;
           const isAdm = !!(m.is_admin === 1 || m.is_admin === '1' || m.is_admin === true);
+          const whIds = parseWhIds(m.warehouse_ids);
+          const whText = whIds.length ? whIds.map(function(x) { return escapeHtml(whMap[x] || ('#' + x)); }).join(', ') : 'Все';
           const delBtn = isSelf
             ? '<span class="current-badge">текущий</span>'
             : `<button class="btn btn-secondary btn-sm" onclick="openEditManagerModal(${m.id})" style="margin-right:4px">Ред.</button><button class="btn btn-danger btn-sm" onclick="deleteManager(${m.id})">Удалить</button>`;
@@ -3902,7 +3917,7 @@
             <td>${escapeHtml(m.first_name) || '—'}</td>
             <td>${escapeHtml(m.last_name) || '—'}</td>
             <td>${escapeHtml(m.username)}</td>
-            <td>${escapeHtml(m.warehouse_name) || 'Все'}</td>
+            <td>${whText}</td>
             <td>${isAdm ? '✓' : '—'}</td>
             <td>${delBtn}</td>
           </tr>`;
@@ -3930,7 +3945,7 @@
       document.getElementById('editManagerSuccess').style.display = 'none';
       document.getElementById('editManagerModal').classList.add('open');
       const sel = document.getElementById('editManagerWarehouse');
-      sel.innerHTML = '<option value="">Все склады</option>';
+      sel.innerHTML = '';
       try {
         const [mRes, wRes] = await Promise.all([
           fetch('/api/manager/list', { credentials: 'include' }),
@@ -3948,10 +3963,11 @@
         adm.disabled = (m.username === 'admin'); // главного администратора нельзя разжаловать
         if (wRes.ok) {
           const wData = await wRes.json();
+          const assigned = parseWhIds(m.warehouse_ids);
           for (const w of wData.warehouses || []) {
             const opt = document.createElement('option');
             opt.value = w.id; opt.textContent = w.name;
-            if (m.warehouse_id && Number(m.warehouse_id) === w.id) opt.selected = true;
+            if (assigned.indexOf(w.id) !== -1) opt.selected = true;
             sel.appendChild(opt);
           }
         }
@@ -3982,7 +3998,7 @@
         errEl.style.display = 'block';
         return;
       }
-      const body = { firstName, lastName, username, warehouseId: document.getElementById('editManagerWarehouse').value || null, isAdmin: document.getElementById('editManagerIsAdmin').checked };
+      const body = { firstName, lastName, username, warehouseIds: selectedNums(document.getElementById('editManagerWarehouse')).map(Number), isAdmin: document.getElementById('editManagerIsAdmin').checked };
       if (password) body.password = password;
       const res = await fetch(`/api/manager/${id}`, {
         method: 'PUT',
@@ -4605,11 +4621,14 @@
           return;
         }
         let html = '<div class="table-wrap"><table><thead><tr>' +
-          '<th>IP</th><th>Причина</th><th>Дата блокировки</th><th class="col-actions"></th>' +
+          '<th>IP</th><th>Тип</th><th>Причина</th><th>Дата блокировки</th><th class="col-actions"></th>' +
           '</tr></thead><tbody>';
         for (const p of data.ips) {
           html += '<tr>' +
             '<td><strong style="font-family:monospace">' + escapeHtml(p.ip) + '</strong></td>' +
+            '<td>' + (Number(p.auto) === 1
+              ? '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#fed7d7;color:#c53030;font-size:0.75rem;font-weight:600">Автобан</span>'
+              : '<span style="color:#718096;font-size:0.8rem">Вручную</span>') + '</td>' +
             '<td>' + (escapeHtml(p.reason) || '—') + '</td>' +
             '<td>' + (p.created_at ? p.created_at.replace('T', ' ').slice(0, 16) : '—') + '</td>' +
             '<td class="col-actions">' +
@@ -5650,6 +5669,8 @@
           isAuthenticated = true;
           currentManagerId = data.id;
           currentManagerWarehouseId = data.warehouseId;
+          currentManagerWarehouseIds = parseWhIds(data.warehouseIds);
+          currentIsAdmin = !!data.isAdmin;
           document.getElementById('loginView').style.display = 'none';
           document.getElementById('dashboardView').style.display = 'block';
           document.getElementById('usernameDisplay').textContent = [data.firstName, data.lastName].filter(Boolean).join(' ') || data.username;

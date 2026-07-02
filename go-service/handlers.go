@@ -440,15 +440,43 @@ func hMe(w http.ResponseWriter, r *http.Request) {
 	var username, fn, ln string
 	var wh *int
 	var admin int
-	db.row("SELECT username, first_name, last_name, warehouse_id, is_admin FROM managers WHERE id=?", id).Scan(&username, &fn, &ln, &wh, &admin)
-	writeJSON(w, 200, map[string]any{"id": id, "username": username, "firstName": fn, "lastName": ln, "warehouseId": wh, "isAdmin": admin == 1})
+	var whIdsPtr *string
+	db.row("SELECT username, first_name, last_name, warehouse_id, is_admin, warehouse_ids FROM managers WHERE id=?", id).Scan(&username, &fn, &ln, &wh, &admin, &whIdsPtr)
+	whIds := []int{}
+	if whIdsPtr != nil {
+		whIds = splitIds(*whIdsPtr)
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "username": username, "firstName": fn, "lastName": ln, "warehouseId": wh, "warehouseIds": whIds, "isAdmin": admin == 1})
 }
 
 func hManagerSlots(w http.ResponseWriter, r *http.Request) {
-	if _, ok := requireManager(w, r); !ok {
+	mid, ok := requireManager(w, r)
+	if !ok {
 		return
 	}
+	// Ограничение видимости: не-админ видит только назначенные ему склады.
+	var whIdsPtr *string
+	var admin int
+	db.row("SELECT warehouse_ids, is_admin FROM managers WHERE id=?", mid).Scan(&whIdsPtr, &admin)
+	allowed := []int{}
+	if whIdsPtr != nil {
+		allowed = splitIds(*whIdsPtr)
+	}
 	q := r.URL.Query()
+	filter := splitIds(q.Get("warehouse_id"))
+	var effective []int
+	if admin != 1 && len(allowed) > 0 {
+		if len(filter) > 0 {
+			effective = intersectInts(filter, allowed)
+		} else {
+			effective = allowed
+		}
+		if len(effective) == 0 {
+			effective = []int{-1} // выбраны чужие склады — ничего
+		}
+	} else {
+		effective = filter
+	}
 	where := "WHERE 1=1"
 	args := []any{}
 	if d := q.Get("date"); d != "" {
@@ -459,9 +487,13 @@ func hManagerSlots(w http.ResponseWriter, r *http.Request) {
 		where += " AND s.type=?"
 		args = append(args, t)
 	}
-	if wh := q.Get("warehouse_id"); wh != "" {
-		where += " AND s.warehouse_id=?"
-		args = append(args, wh)
+	if len(effective) > 0 {
+		ph := make([]string, len(effective))
+		for i, v := range effective {
+			ph[i] = "?"
+			args = append(args, v)
+		}
+		where += " AND s.warehouse_id IN (" + strings.Join(ph, ",") + ")"
 	}
 	rows, err := db.qu("SELECT s.id,s.date,s.type,s.time_start,s.time_end,s.is_booked,s.confirmed,s.in_progress,s.assembling,s.completed,s.warehouse_id,s.customer_name,s.customer_phone,s.customer_account,s.customer_comment,s.customer_organization,s.storekeeper_name,w.name FROM slots s LEFT JOIN warehouses w ON w.id=s.warehouse_id "+where+" ORDER BY s.date DESC, s.time_start", args...)
 	if err != nil {
@@ -568,7 +600,7 @@ func hManagerList(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireAdmin(w, r); !ok {
 		return
 	}
-	rows, err := db.qu("SELECT m.id,m.username,m.first_name,m.last_name,m.warehouse_id,m.is_admin,w.name FROM managers m LEFT JOIN warehouses w ON w.id=m.warehouse_id ORDER BY m.id")
+	rows, err := db.qu("SELECT m.id,m.username,m.first_name,m.last_name,m.warehouse_id,m.is_admin,m.warehouse_ids,w.name FROM managers m LEFT JOIN warehouses w ON w.id=m.warehouse_id ORDER BY m.id")
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
@@ -579,9 +611,13 @@ func hManagerList(w http.ResponseWriter, r *http.Request) {
 		var id, admin int
 		var un, fn, ln string
 		var wh *int
-		var wn *string
-		rows.Scan(&id, &un, &fn, &ln, &wh, &admin, &wn)
-		out = append(out, map[string]any{"id": id, "username": un, "first_name": fn, "last_name": ln, "warehouse_id": wh, "is_admin": admin, "warehouse_name": ps(wn)})
+		var whIdsPtr, wn *string
+		rows.Scan(&id, &un, &fn, &ln, &wh, &admin, &whIdsPtr, &wn)
+		whIds := []int{}
+		if whIdsPtr != nil {
+			whIds = splitIds(*whIdsPtr)
+		}
+		out = append(out, map[string]any{"id": id, "username": un, "first_name": fn, "last_name": ln, "warehouse_id": wh, "warehouse_ids": whIds, "is_admin": admin, "warehouse_name": ps(wn)})
 	}
 	writeJSON(w, 200, map[string]any{"managers": out})
 }
@@ -593,6 +629,7 @@ func hManagerCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username, Password, FirstName, LastName string
 		WarehouseId                             *int
+		WarehouseIds                            []int
 		IsAdmin                                 bool
 	}
 	json.NewDecoder(r.Body).Decode(&body)
@@ -610,8 +647,9 @@ func hManagerCreate(w http.ResponseWriter, r *http.Request) {
 	if body.IsAdmin {
 		adm = 1
 	}
-	_, err := db.ex("INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id, is_admin) VALUES (?, ?, ?, ?, ?, ?)",
-		body.Username, sha256hex(body.Password), body.FirstName, body.LastName, body.WarehouseId, adm)
+	whCsv, whPrimary, _ := mgrWarehouseIds(body.WarehouseIds, body.WarehouseId)
+	_, err := db.ex("INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id, warehouse_ids, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		body.Username, sha256hex(body.Password), body.FirstName, body.LastName, whPrimary, whCsv, adm)
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
@@ -627,6 +665,7 @@ func hManagerUpdate(w http.ResponseWriter, r *http.Request, idStr string) {
 	var body struct {
 		Username, Password, FirstName, LastName string
 		WarehouseId                             *int
+		WarehouseIds                            []int
 		IsAdmin                                 bool
 	}
 	json.NewDecoder(r.Body).Decode(&body)
@@ -646,12 +685,13 @@ func hManagerUpdate(w http.ResponseWriter, r *http.Request, idStr string) {
 	if curUser == "admin" {
 		adm = 1 // главного администратора нельзя разжаловать
 	}
+	whCsv, whPrimary, _ := mgrWarehouseIds(body.WarehouseIds, body.WarehouseId)
 	if body.Password != "" {
-		db.ex("UPDATE managers SET username=?, password_hash=?, first_name=?, last_name=?, warehouse_id=?, is_admin=? WHERE id=?",
-			body.Username, sha256hex(body.Password), body.FirstName, body.LastName, body.WarehouseId, adm, id)
+		db.ex("UPDATE managers SET username=?, password_hash=?, first_name=?, last_name=?, warehouse_id=?, warehouse_ids=?, is_admin=? WHERE id=?",
+			body.Username, sha256hex(body.Password), body.FirstName, body.LastName, whPrimary, whCsv, adm, id)
 	} else {
-		db.ex("UPDATE managers SET username=?, first_name=?, last_name=?, warehouse_id=?, is_admin=? WHERE id=?",
-			body.Username, body.FirstName, body.LastName, body.WarehouseId, adm, id)
+		db.ex("UPDATE managers SET username=?, first_name=?, last_name=?, warehouse_id=?, warehouse_ids=?, is_admin=? WHERE id=?",
+			body.Username, body.FirstName, body.LastName, whPrimary, whCsv, adm, id)
 	}
 	writeJSON(w, 200, map[string]any{"success": true})
 }

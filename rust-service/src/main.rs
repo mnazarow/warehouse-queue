@@ -698,6 +698,43 @@ fn clean_phone(s: &str) -> String {
     s.chars().filter(|c| *c == '+' || c.is_ascii_digit()).collect()
 }
 
+// ---- склады менеджера (несколько) ----
+fn split_ids(csv: &str) -> Vec<i64> {
+    csv.split(',')
+        .filter_map(|p| p.trim().parse::<i64>().ok())
+        .filter(|n| *n > 0)
+        .collect()
+}
+fn intersect_ids(a: &[i64], b: &[i64]) -> Vec<i64> {
+    a.iter().filter(|x| b.contains(x)).cloned().collect()
+}
+fn ids_csv(ids: &[i64]) -> String {
+    ids.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(",")
+}
+fn body_warehouse_ids(body: &Value) -> Vec<i64> {
+    let mut out: Vec<i64> = vec![];
+    if let Some(arr) = body.get("warehouseIds").and_then(|v| v.as_array()) {
+        for e in arr {
+            if let Some(n) = e.as_i64().or_else(|| e.as_str().and_then(|s| s.parse().ok())) {
+                if n > 0 && !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some(n) = body
+            .get("warehouseId")
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        {
+            if n > 0 {
+                out.push(n);
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Автоблокировки IP (баны в banned_ips с префиксом истекают через 24 ч)
 // ---------------------------------------------------------------------------
@@ -1281,14 +1318,18 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
         if mid == 0 {
             return Resp::err(401, "Unauthorized");
         }
-        let r = db.query_one("SELECT username, first_name, last_name, warehouse_id, is_admin FROM managers WHERE id=?", &[json!(mid)]);
+        let r = db.query_one("SELECT username, first_name, last_name, warehouse_id, is_admin, warehouse_ids FROM managers WHERE id=?", &[json!(mid)]);
         return match r {
-            Some(r) => Resp::json(200, json!({
-                "id": mid, "username": r.get("username"),
-                "firstName": r.get("first_name"), "lastName": r.get("last_name"),
-                "warehouseId": r.get("warehouse_id"),
-                "isAdmin": to_i64(r.get("is_admin").unwrap_or(&Value::Null)) == 1
-            })),
+            Some(r) => {
+                let wh_ids = split_ids(r.get("warehouse_ids").and_then(|v| v.as_str()).unwrap_or(""));
+                Resp::json(200, json!({
+                    "id": mid, "username": r.get("username"),
+                    "firstName": r.get("first_name"), "lastName": r.get("last_name"),
+                    "warehouseId": r.get("warehouse_id"),
+                    "warehouseIds": wh_ids,
+                    "isAdmin": to_i64(r.get("is_admin").unwrap_or(&Value::Null)) == 1
+                }))
+            }
             None => Resp::err(404, "not found"),
         };
     }
@@ -1309,7 +1350,7 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
     }
 
     if p == "/api/manager/slots" && m == "GET" {
-        return h_manager_slots(db, ctx);
+        return h_manager_slots(db, mid, ctx);
     }
     if seg.len() == 5 && seg[1] == "manager" && seg[2] == "slots" && seg[4] == "send-message" && m == "POST" {
         let msg = bstr(&ctx.body, "message");
@@ -1364,7 +1405,7 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
         if !is_admin(db, mid) {
             return Resp::err(403, "Доступ только для администраторов");
         }
-        let rows = db.query_maps("SELECT m.id,m.username,m.first_name,m.last_name,m.warehouse_id,m.is_admin,w.name AS warehouse_name FROM managers m LEFT JOIN warehouses w ON w.id=m.warehouse_id ORDER BY m.id", &[]);
+        let rows = db.query_maps("SELECT m.id,m.username,m.first_name,m.last_name,m.warehouse_id,m.warehouse_ids,m.is_admin,w.name AS warehouse_name FROM managers m LEFT JOIN warehouses w ON w.id=m.warehouse_id ORDER BY m.id", &[]);
         return Resp::json(200, json!({ "managers": rows }));
     }
     if p == "/api/manager/create" && m == "POST" {
@@ -1496,7 +1537,7 @@ fn route_api(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx) ->
     }
     if p == "/api/manager/banned-ips" {
         if m == "GET" {
-            let rows = db.query_maps("SELECT * FROM banned_ips ORDER BY created_at DESC", &[]);
+            let rows = db.query_maps("SELECT *, CASE WHEN reason LIKE 'Автоблокировка%' THEN 1 ELSE 0 END AS auto FROM banned_ips ORDER BY created_at DESC", &[]);
             return Resp::json(200, json!({ "ips": rows }));
         }
         if m == "POST" {
@@ -2122,7 +2163,29 @@ fn h_book(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx, id_st
     Resp::ok()
 }
 
-fn h_manager_slots(db: &mut Db, ctx: &Ctx) -> Resp {
+fn h_manager_slots(db: &mut Db, mid: i64, ctx: &Ctx) -> Resp {
+    // Ограничение видимости: не-админ видит только назначенные ему склады.
+    let admin = is_admin(db, mid);
+    let allowed = db
+        .query_one("SELECT warehouse_ids FROM managers WHERE id=?", &[json!(mid)])
+        .and_then(|r| r.get("warehouse_ids").and_then(|v| v.as_str().map(|s| s.to_string())))
+        .map(|s| split_ids(&s))
+        .unwrap_or_default();
+    let filter = split_ids(&q(ctx, "warehouse_id"));
+    let effective: Vec<i64> = if !admin && !allowed.is_empty() {
+        let e = if !filter.is_empty() {
+            intersect_ids(&filter, &allowed)
+        } else {
+            allowed.clone()
+        };
+        if e.is_empty() {
+            vec![-1]
+        } else {
+            e
+        }
+    } else {
+        filter
+    };
     let mut where_ = "WHERE 1=1".to_string();
     let mut params: Vec<Value> = vec![];
     let d = q(ctx, "date");
@@ -2135,10 +2198,12 @@ fn h_manager_slots(db: &mut Db, ctx: &Ctx) -> Resp {
         where_.push_str(" AND s.type=?");
         params.push(json!(t));
     }
-    let wh = q(ctx, "warehouse_id");
-    if let Ok(id) = wh.parse::<i64>() {
-        where_.push_str(" AND s.warehouse_id=?");
-        params.push(json!(id));
+    if !effective.is_empty() {
+        let ph: Vec<&str> = effective.iter().map(|_| "?").collect();
+        where_.push_str(&format!(" AND s.warehouse_id IN ({})", ph.join(",")));
+        for v in &effective {
+            params.push(json!(v));
+        }
     }
     let sql = format!("SELECT s.id,s.date,s.type,s.time_start,s.time_end,s.is_booked,s.confirmed,s.in_progress,s.assembling,s.completed,s.warehouse_id,s.customer_name,s.customer_phone,s.customer_account,s.customer_comment,s.customer_organization,s.storekeeper_name,w.name AS warehouse_name FROM slots s LEFT JOIN warehouses w ON w.id=s.warehouse_id {where_} ORDER BY s.date DESC, s.time_start");
     let rows = db.query_maps(&sql, &params);
@@ -2255,12 +2320,14 @@ fn h_manager_create(db: &mut Db, mid: i64, ctx: &Ctx) -> Resp {
         return Resp::err(409, "Username already exists");
     }
     let adm = if bbool(&ctx.body, "isAdmin") { 1 } else { 0 };
+    let ids = body_warehouse_ids(&ctx.body);
+    let primary = ids.first().copied();
     db.exec(
-        "INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id, is_admin) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id, warehouse_ids, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?)",
         &[
             json!(un), json!(sha256hex(&pw)),
             json!(bstr(&ctx.body, "firstName")), json!(bstr(&ctx.body, "lastName")),
-            opt_i64_json(bopt_i64(&ctx.body, "warehouseId")), json!(adm),
+            opt_i64_json(primary), json!(ids_csv(&ids)), json!(adm),
         ],
     );
     Resp::ok()
@@ -2284,15 +2351,18 @@ fn h_manager_update(db: &mut Db, mid: i64, ctx: &Ctx, id_str: &str) -> Resp {
         adm = 1;
     }
     let pw = bstr(&ctx.body, "password");
+    let ids = body_warehouse_ids(&ctx.body);
+    let primary = ids.first().copied();
+    let csv = ids_csv(&ids);
     if !pw.is_empty() {
         db.exec(
-            "UPDATE managers SET username=?, password_hash=?, first_name=?, last_name=?, warehouse_id=?, is_admin=? WHERE id=?",
-            &[json!(un), json!(sha256hex(&pw)), json!(bstr(&ctx.body, "firstName")), json!(bstr(&ctx.body, "lastName")), opt_i64_json(bopt_i64(&ctx.body, "warehouseId")), json!(adm), json!(id)],
+            "UPDATE managers SET username=?, password_hash=?, first_name=?, last_name=?, warehouse_id=?, warehouse_ids=?, is_admin=? WHERE id=?",
+            &[json!(un), json!(sha256hex(&pw)), json!(bstr(&ctx.body, "firstName")), json!(bstr(&ctx.body, "lastName")), opt_i64_json(primary), json!(csv), json!(adm), json!(id)],
         );
     } else {
         db.exec(
-            "UPDATE managers SET username=?, first_name=?, last_name=?, warehouse_id=?, is_admin=? WHERE id=?",
-            &[json!(un), json!(bstr(&ctx.body, "firstName")), json!(bstr(&ctx.body, "lastName")), opt_i64_json(bopt_i64(&ctx.body, "warehouseId")), json!(adm), json!(id)],
+            "UPDATE managers SET username=?, first_name=?, last_name=?, warehouse_id=?, warehouse_ids=?, is_admin=? WHERE id=?",
+            &[json!(un), json!(bstr(&ctx.body, "firstName")), json!(bstr(&ctx.body, "lastName")), opt_i64_json(primary), json!(csv), json!(adm), json!(id)],
         );
     }
     Resp::ok()

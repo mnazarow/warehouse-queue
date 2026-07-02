@@ -136,7 +136,7 @@ func extrasRouter(w http.ResponseWriter, r *http.Request, p, m string, seg []str
 		db.ex("DELETE FROM banned_phones WHERE id=?", seg[len(seg)-1])
 		ok200(w)
 	case p == "/api/manager/banned-ips":
-		refList(w, r, "banned_ips", "ips", "SELECT * FROM banned_ips ORDER BY created_at DESC", func(w http.ResponseWriter, r *http.Request) {
+		refList(w, r, "banned_ips", "ips", "SELECT *, CASE WHEN reason LIKE 'Автоблокировка%' THEN 1 ELSE 0 END AS auto FROM banned_ips ORDER BY created_at DESC", func(w http.ResponseWriter, r *http.Request) {
 			b := body(r)
 			n := bstr(b, "ip")
 			if n == "" {

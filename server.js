@@ -439,6 +439,20 @@ function autoBanIp(ip, reason) {
 
 function isLoopback(ip) { return !ip || ip === '127.0.0.1' || ip === '::1'; }
 
+// Нормализует список складов менеджера в массив числовых id-строк (без дублей).
+function normalizeWarehouseIds(warehouseIds, warehouseId) {
+  let arr = [];
+  if (Array.isArray(warehouseIds)) arr = warehouseIds;
+  else if (typeof warehouseIds === 'string' && warehouseIds) arr = warehouseIds.split(',');
+  else if (warehouseId != null && warehouseId !== '') arr = [warehouseId];
+  const out = [];
+  for (let v of arr) {
+    v = String(v).trim();
+    if (v && /^\d+$/.test(v) && out.indexOf(v) === -1) out.push(v);
+  }
+  return out;
+}
+
 function logAction(userType, userName, action, details, slotId, ip, userAgent) {
   try {
     const enabled = db.prepare("SELECT value FROM settings WHERE key = 'logging_enabled'").get();
@@ -983,14 +997,27 @@ app.get('/api/manager/me', requireManager, async (req, res) => {
   const cached = await redisGet(cacheKey);
   if (cached) return res.json(JSON.parse(cached));
   const mgr = db.prepare('SELECT * FROM managers WHERE id = ?').get(req.session.managerId);
-  const response = { id: mgr.id, username: mgr.username, firstName: mgr.first_name, lastName: mgr.last_name, warehouseId: mgr.warehouse_id, isAdmin: !!(mgr.is_admin === 1 || mgr.is_admin === '1' || mgr.is_admin === true) };
+  const warehouseIds = String(mgr.warehouse_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
+  const response = { id: mgr.id, username: mgr.username, firstName: mgr.first_name, lastName: mgr.last_name, warehouseId: mgr.warehouse_id, warehouseIds: warehouseIds, isAdmin: !!(mgr.is_admin === 1 || mgr.is_admin === '1' || mgr.is_admin === true) };
   redisSet(cacheKey, JSON.stringify(response), 300);
   res.json(response);
 });
 
 app.get('/api/manager/slots', requireManager, async (req, res) => {
   const { date, type, warehouse_id } = req.query;
-  const cacheKey = 'slots:' + (date || 'all') + ':' + (type || 'all') + ':' + (warehouse_id || 'all');
+  // Ограничение видимости: не-админ видит только назначенные ему склады.
+  const mgr = db.prepare('SELECT warehouse_ids, is_admin FROM managers WHERE id = ?').get(req.session.managerId);
+  const isAdmin = !!(mgr && (mgr.is_admin === 1 || mgr.is_admin === '1' || mgr.is_admin === true));
+  const allowed = String((mgr && mgr.warehouse_ids) || '').split(',').map(s => s.trim()).filter(Boolean);
+  const filterIds = warehouse_id ? String(warehouse_id).split(',').map(s => s.trim()).filter(Boolean) : [];
+  let effective;
+  if (!isAdmin && allowed.length) {
+    effective = filterIds.length ? filterIds.filter(x => allowed.indexOf(x) !== -1) : allowed;
+    if (!effective.length) effective = ['-1']; // выбраны чужие склады — ничего не показываем
+  } else {
+    effective = filterIds; // админ или без назначения: пусто = все
+  }
+  const cacheKey = 'slots:' + req.session.managerId + ':' + (date || 'all') + ':' + (type || 'all') + ':' + (effective.join('-') || 'all');
   const cached = await redisGet(cacheKey);
   if (cached) return res.json(JSON.parse(cached));
   let query = 'SELECT s.*, w.name AS warehouse_name, vc.name AS vehicle_class_name, lt.name AS load_type_name FROM slots s LEFT JOIN warehouses w ON w.id = s.warehouse_id LEFT JOIN vehicle_classes vc ON vc.id = s.vehicle_class_id LEFT JOIN load_types lt ON lt.id = s.load_type_id WHERE 1=1';
@@ -1003,9 +1030,9 @@ app.get('/api/manager/slots', requireManager, async (req, res) => {
     query += ' AND s.type = ?';
     params.push(type);
   }
-  if (warehouse_id) {
-    query += ' AND s.warehouse_id = ?';
-    params.push(warehouse_id);
+  if (effective.length) {
+    query += ' AND s.warehouse_id IN (' + effective.map(function() { return '?'; }).join(',') + ')';
+    effective.forEach(function(x) { params.push(parseInt(x, 10)); });
   }
   query += ' ORDER BY s.date DESC, s.time_start';
   const slots = db.prepare(query).all(...params);
@@ -1807,7 +1834,7 @@ app.get('/api/manager/list', requireManager, async (req, res) => {
 });
 
 app.post('/api/manager/create', requireManager, (req, res) => {
-  const { username, password, firstName, lastName, warehouseId, isAdmin } = req.body;
+  const { username, password, firstName, lastName, warehouseId, warehouseIds, isAdmin } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });
   }
@@ -1815,18 +1842,22 @@ app.post('/api/manager/create', requireManager, (req, res) => {
   if (existing) {
     return res.status(409).json({ error: 'Username already exists' });
   }
+  const ids = normalizeWarehouseIds(warehouseIds, warehouseId);
   const hash = crypto.createHash('sha256').update(password).digest('hex');
-  db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id, is_admin) VALUES (?, ?, ?, ?, ?, ?)').run(username, hash, firstName || '', lastName || '', warehouseId || null, isAdmin ? 1 : 0);
+  db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id, warehouse_ids, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?)').run(username, hash, firstName || '', lastName || '', ids.length ? Number(ids[0]) : null, ids.join(','), isAdmin ? 1 : 0);
   redisFlushByPrefix('list');
   res.json({ success: true });
 });
 
 app.put('/api/manager/:id', requireManager, requireAdmin, (req, res) => {
   const { id } = req.params;
-  const { username, password, firstName, lastName, warehouseId, isAdmin } = req.body;
+  const { username, password, firstName, lastName, warehouseId, warehouseIds, isAdmin } = req.body;
   if (!username) {
     return res.status(400).json({ error: 'Username is required' });
   }
+  const ids = normalizeWarehouseIds(warehouseIds, warehouseId);
+  const whPrimary = ids.length ? Number(ids[0]) : null;
+  const whCsv = ids.join(',');
   const mgr = db.prepare('SELECT * FROM managers WHERE id = ?').get(id);
   if (!mgr) {
     return res.status(404).json({ error: 'Manager not found' });
@@ -1842,9 +1873,9 @@ app.put('/api/manager/:id', requireManager, requireAdmin, (req, res) => {
   if (mgr.username === 'admin') adminFlag = 1;
   if (password) {
     const hash = crypto.createHash('sha256').update(password).digest('hex');
-    db.prepare('UPDATE managers SET username = ?, password_hash = ?, first_name = ?, last_name = ?, warehouse_id = ?, is_admin = ? WHERE id = ?').run(username, hash, firstName || '', lastName || '', warehouseId || null, adminFlag, id);
+    db.prepare('UPDATE managers SET username = ?, password_hash = ?, first_name = ?, last_name = ?, warehouse_id = ?, warehouse_ids = ?, is_admin = ? WHERE id = ?').run(username, hash, firstName || '', lastName || '', whPrimary, whCsv, adminFlag, id);
   } else {
-    db.prepare('UPDATE managers SET username = ?, first_name = ?, last_name = ?, warehouse_id = ?, is_admin = ? WHERE id = ?').run(username, firstName || '', lastName || '', warehouseId || null, adminFlag, id);
+    db.prepare('UPDATE managers SET username = ?, first_name = ?, last_name = ?, warehouse_id = ?, warehouse_ids = ?, is_admin = ? WHERE id = ?').run(username, firstName || '', lastName || '', whPrimary, whCsv, adminFlag, id);
   }
   redisFlushByPrefix('list');
   redisFlushByPrefix('manager-me');
@@ -3203,7 +3234,7 @@ app.get('/api/manager/banned-ips', requireManager, async (req, res) => {
   const cacheKey = 'banned-ips';
   const cached = await redisGet(cacheKey);
   if (cached) return res.json(JSON.parse(cached));
-  const list = db.prepare('SELECT * FROM banned_ips ORDER BY created_at DESC').all();
+  const list = db.prepare("SELECT *, CASE WHEN reason LIKE 'Автоблокировка%' THEN 1 ELSE 0 END AS auto FROM banned_ips ORDER BY created_at DESC").all();
   const response = { ips: list };
   redisSet(cacheKey, JSON.stringify(response), 300);
   res.json(response);
