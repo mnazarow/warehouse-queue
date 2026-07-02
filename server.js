@@ -363,8 +363,17 @@ ensureManagerAdminColumn();
 // Главный администратор (admin) всегда имеет признак администратора.
 try { db.prepare("UPDATE managers SET is_admin = 1 WHERE username = 'admin'").run(); } catch (e) {}
 
+// Доверяем X-Forwarded-For только если приложение стоит за доверенным прокси
+// (TRUST_PROXY=1). Иначе клиент мог бы подделать IP и обойти баны/автоблок.
 function getIp(req) {
-  return req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : req.connection.remoteAddress || '';
+  const trust = process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true';
+  let ip = '';
+  if (trust && req.headers['x-forwarded-for']) {
+    ip = String(req.headers['x-forwarded-for']).split(',')[0].trim();
+  } else {
+    ip = (req.connection && req.connection.remoteAddress) || (req.socket && req.socket.remoteAddress) || '';
+  }
+  return String(ip).replace(/^::ffff:/, '');
 }
 
 function getUserAgent(req) {
@@ -395,6 +404,40 @@ setInterval(() => {
     if (fresh.length) bookAttempts.set(ip, fresh); else bookAttempts.delete(ip);
   }
 }, 5 * 60 * 1000).unref();
+
+// Автоблокировки: записи в banned_ips с этим префиксом истекают через сутки
+// (по created_at). Ручные баны — бессрочные.
+const AUTO_BAN_PREFIX = 'Автоблокировка';
+const AUTO_BAN_MS = 24 * 60 * 60 * 1000;
+const captchaFails = new Map(); // ip -> число неверных капч подряд
+
+function ipBanActive(ip) {
+  if (!ip) return false;
+  const row = db.prepare('SELECT reason, created_at FROM banned_ips WHERE ip = ? ORDER BY id DESC LIMIT 1').get(ip);
+  if (!row) return false;
+  if (row.reason && String(row.reason).startsWith(AUTO_BAN_PREFIX)) {
+    const t = Date.parse(String(row.created_at || '').replace(' ', 'T') + 'Z');
+    if (!isNaN(t) && Date.now() - t >= AUTO_BAN_MS) {
+      db.prepare('DELETE FROM banned_ips WHERE ip = ?').run(ip);
+      return false;
+    }
+  }
+  return true;
+}
+
+function ipInAllowedNetworks(ip) {
+  if (!ip) return false;
+  const nets = db.prepare('SELECT network FROM allowed_networks').all();
+  return nets.some(n => ipInNetwork(ip, n.network));
+}
+
+function autoBanIp(ip, reason) {
+  if (!ip) return;
+  const ex = db.prepare('SELECT id FROM banned_ips WHERE ip = ?').get(ip);
+  if (!ex) db.prepare("INSERT INTO banned_ips (ip, reason, created_at) VALUES (?, ?, datetime('now'))").run(ip, reason);
+}
+
+function isLoopback(ip) { return !ip || ip === '127.0.0.1' || ip === '::1'; }
 
 function logAction(userType, userName, action, details, slotId, ip, userAgent) {
   try {
@@ -743,9 +786,17 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
     return res.status(403).json({ error: 'Ваш номер телефона находится в чёрном списке' });
   }
   const clientIp = getIp(req);
-  const bannedIp = db.prepare('SELECT id FROM banned_ips WHERE ip = ?').get(clientIp);
-  if (bannedIp) {
+  if (ipBanActive(clientIp)) {
     return res.status(403).json({ error: 'Ваш IP-адрес находится в чёрном списке' });
+  }
+  // Автоблокировка: более 3 заявок за сутки с IP, который не в разрешённых сетях.
+  if (!isLoopback(clientIp) && !ipInAllowedNetworks(clientIp)) {
+    const today = new Date().toISOString().slice(0, 10);
+    const cnt = db.prepare("SELECT COUNT(*) AS c FROM slots WHERE customer_ip = ? AND is_booked = 1 AND substr(booked_at, 1, 10) = ?").get(clientIp, today);
+    if (cnt && cnt.c >= 3) {
+      autoBanIp(clientIp, AUTO_BAN_PREFIX + ': более 3 заявок за сутки');
+      return res.status(403).json({ error: 'Превышен лимит заявок с вашего IP за сутки. Доступ заблокирован на сутки.' });
+    }
   }
 
   const allowNoAccountSetting = db.prepare("SELECT value FROM settings WHERE key = 'allow_booking_without_account'").get();
@@ -771,8 +822,19 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
     }
   }
   if (req.session.captcha === undefined || Number(captchaAnswer) !== req.session.captcha) {
+    // Автоблокировка при неверной капче более 5 раз подряд с одного IP.
+    if (!isLoopback(clientIp)) {
+      const f = (captchaFails.get(clientIp) || 0) + 1;
+      captchaFails.set(clientIp, f);
+      if (f > 5 && !ipInAllowedNetworks(clientIp)) {
+        autoBanIp(clientIp, AUTO_BAN_PREFIX + ': неверная капча более 5 раз подряд');
+        captchaFails.delete(clientIp);
+        return res.status(403).json({ error: 'Слишком много неверных вводов капчи. Доступ заблокирован на сутки.' });
+      }
+    }
     return res.status(400).json({ error: 'Invalid captcha answer' });
   }
+  captchaFails.delete(clientIp);
   delete req.session.captcha;
 
   if (account) {
@@ -1624,6 +1686,7 @@ function requireAllowedIP(req, res, next) {
   const clientIP = rawIP.replace(/^::ffff:/, '');
   if (clientIP === '127.0.0.1' || clientIP === '::1') return next();
   const nets = db.prepare('SELECT network FROM allowed_networks').all();
+  if (!nets.length) return next(); // пустой список = доступ открыт (как в Go/Rust)
   const allowed = nets.some(n => ipInNetwork(clientIP, n.network));
   if (!allowed) {
     return res.status(403).json({ error: 'Access denied from this IP' });

@@ -275,13 +275,43 @@ func hBook(w http.ResponseWriter, r *http.Request, idStr string) {
 		writeJSON(w, 400, map[string]any{"error": "name and phone are required"})
 		return
 	}
+	ip := getIP(r)
+	if scalarInt("SELECT COUNT(*) FROM banned_phones WHERE phone=?", phone) > 0 {
+		writeJSON(w, 403, map[string]any{"error": "Ваш номер телефона находится в чёрном списке"})
+		return
+	}
+	if ipBanActive(ip) {
+		writeJSON(w, 403, map[string]any{"error": "Ваш IP-адрес находится в чёрном списке"})
+		return
+	}
 	s := getSession(w, r)
 	ans, _ := body.CaptchaAnswer.Int64()
 	if !s.hasCap || int(ans) != s.captcha {
+		// Автоблокировка при неверной капче более 5 раз подряд с одного IP.
+		if !isLoopback(ip) {
+			if incCaptchaFail(ip) > 5 && !ipInAllowedNetworks(ip) {
+				autoBanIP(ip, autoBanPrefix+": неверная капча более 5 раз подряд")
+				resetCaptchaFail(ip)
+				writeJSON(w, 403, map[string]any{"error": "Слишком много неверных вводов капчи. Доступ заблокирован на сутки."})
+				return
+			}
+		}
 		writeJSON(w, 400, map[string]any{"error": "Invalid captcha answer"})
 		return
 	}
+	resetCaptchaFail(ip)
 	s.hasCap = false
+
+	// Автоблокировка: более 3 заявок за сутки с IP, который не входит в
+	// разрешённые сети. Такой IP блокируется на сутки.
+	if !isLoopback(ip) && !ipInAllowedNetworks(ip) {
+		today := time.Now().Format("2006-01-02")
+		if scalarInt("SELECT COUNT(*) FROM slots WHERE customer_ip=? AND is_booked=1 AND substr(booked_at,1,10)=?", ip, today) >= 3 {
+			autoBanIP(ip, autoBanPrefix+": более 3 заявок за сутки")
+			writeJSON(w, 403, map[string]any{"error": "Превышен лимит заявок с вашего IP за сутки. Доступ заблокирован на сутки."})
+			return
+		}
+	}
 
 	account := strings.TrimSpace(body.Account)
 	if db.getSetting("allow_booking_without_account", "1") == "0" && account == "" {

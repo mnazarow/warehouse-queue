@@ -80,16 +80,23 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// getIP доверяет X-Forwarded-For только за доверенным прокси (TRUST_PROXY=1),
+// иначе клиент мог бы подделать IP и обойти баны/автоблок.
 func getIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
+	tp := env("TRUST_PROXY", "")
+	if tp == "1" || tp == "true" {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			return normIP(strings.TrimSpace(strings.Split(xff, ",")[0]))
+		}
 	}
 	host := r.RemoteAddr
 	if i := strings.LastIndex(host, ":"); i >= 0 {
 		host = host[:i]
 	}
-	return host
+	return normIP(host)
 }
+
+func normIP(s string) string { return strings.TrimPrefix(s, "::ffff:") }
 
 func needsIPGate(p string) bool {
 	return p == "/manager.html" || strings.HasPrefix(p, "/api/manager") || p == "/storekeeper" || strings.HasPrefix(p, "/api/storekeeper")

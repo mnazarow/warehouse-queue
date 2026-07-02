@@ -15,7 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server};
 
@@ -696,6 +696,76 @@ fn send_sms(db: &mut Db, phone: &str, msg: &str) {
 
 fn clean_phone(s: &str) -> String {
     s.chars().filter(|c| *c == '+' || c.is_ascii_digit()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Автоблокировки IP (баны в banned_ips с префиксом истекают через 24 ч)
+// ---------------------------------------------------------------------------
+
+const AUTO_BAN_PREFIX: &str = "Автоблокировка";
+static CAPTCHA_FAILS: OnceLock<Mutex<HashMap<String, i32>>> = OnceLock::new();
+
+fn captcha_fail_map() -> &'static Mutex<HashMap<String, i32>> {
+    CAPTCHA_FAILS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn inc_captcha_fail(ip: &str) -> i32 {
+    let mut m = captcha_fail_map().lock().unwrap();
+    let e = m.entry(ip.to_string()).or_insert(0);
+    *e += 1;
+    *e
+}
+fn reset_captcha_fail(ip: &str) {
+    captcha_fail_map().lock().unwrap().remove(ip);
+}
+fn is_loopback(ip: &str) -> bool {
+    ip.is_empty() || ip == "127.0.0.1" || ip == "::1"
+}
+
+fn ip_ban_active(db: &mut Db, ip: &str) -> bool {
+    if ip.is_empty() {
+        return false;
+    }
+    let row = match db.query_one(
+        "SELECT reason, created_at FROM banned_ips WHERE ip=? ORDER BY id DESC LIMIT 1",
+        &[json!(ip)],
+    ) {
+        Some(r) => r,
+        None => return false,
+    };
+    let reason = row.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+    if reason.starts_with(AUTO_BAN_PREFIX) {
+        let created = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        if let Ok(t) = NaiveDateTime::parse_from_str(created, "%Y-%m-%d %H:%M:%S") {
+            if (Local::now().naive_local() - t).num_hours() >= 24 {
+                db.exec("DELETE FROM banned_ips WHERE ip=?", &[json!(ip)]);
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn ip_in_allowed_networks(db: &mut Db, ip: &str) -> bool {
+    for m in db.query_maps("SELECT network FROM allowed_networks", &[]) {
+        if let Some(n) = m.get("network").and_then(|v| v.as_str()) {
+            if ip_in_cidr(ip, n) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn auto_ban_ip(db: &mut Db, ip: &str, reason: &str) {
+    if ip.is_empty() {
+        return;
+    }
+    if db.scalar_i64("SELECT COUNT(*) AS c FROM banned_ips WHERE ip=?", "c", &[json!(ip)]) == 0 {
+        db.exec(
+            "INSERT INTO banned_ips (ip, reason, created_at) VALUES (?, ?, ?)",
+            &[json!(ip), json!(reason), json!(now_ts())],
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1963,17 +2033,44 @@ fn h_book(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx, id_st
     if name.is_empty() || phone.is_empty() {
         return Resp::err(400, "name and phone are required");
     }
+    let ip = ctx.ip.clone();
+    if db.scalar_i64("SELECT COUNT(*) AS c FROM banned_phones WHERE phone=?", "c", &[json!(phone)]) > 0 {
+        return Resp::err(403, "Ваш номер телефона находится в чёрном списке");
+    }
+    if ip_ban_active(db, &ip) {
+        return Resp::err(403, "Ваш IP-адрес находится в чёрном списке");
+    }
     let ans = ctx
         .body
         .get("captchaAnswer")
         .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
         .unwrap_or(-1);
-    {
+    let captcha_ok = {
         let s = sessions.entry(ctx.token.clone()).or_default();
-        if !s.has_cap || ans != s.captcha {
-            return Resp::err(400, "Invalid captcha answer");
+        let ok = s.has_cap && ans == s.captcha;
+        if ok {
+            s.has_cap = false;
         }
-        s.has_cap = false;
+        ok
+    };
+    if !captcha_ok {
+        // Автоблокировка при неверной капче более 5 раз подряд с одного IP.
+        if !is_loopback(&ip) && inc_captcha_fail(&ip) > 5 && !ip_in_allowed_networks(db, &ip) {
+            auto_ban_ip(db, &ip, "Автоблокировка: неверная капча более 5 раз подряд");
+            reset_captcha_fail(&ip);
+            return Resp::err(403, "Слишком много неверных вводов капчи. Доступ заблокирован на сутки.");
+        }
+        return Resp::err(400, "Invalid captcha answer");
+    }
+    reset_captcha_fail(&ip);
+    // Автоблокировка: более 3 заявок за сутки с IP не из разрешённых сетей.
+    if !is_loopback(&ip) && !ip_in_allowed_networks(db, &ip) {
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let c = db.scalar_i64("SELECT COUNT(*) AS c FROM slots WHERE customer_ip=? AND is_booked=1 AND substr(booked_at,1,10)=?", "c", &[json!(ip), json!(today)]);
+        if c >= 3 {
+            auto_ban_ip(db, &ip, "Автоблокировка: более 3 заявок за сутки");
+            return Resp::err(403, "Превышен лимит заявок с вашего IP за сутки. Доступ заблокирован на сутки.");
+        }
     }
     let account = bstr(&ctx.body, "account");
     if db.get_setting("allow_booking_without_account", "1") == "0" && account.is_empty() {
@@ -2344,11 +2441,14 @@ fn handle(mut request: Request, db: &mut Db, sessions: &mut HashMap<String, Sess
             _ => {}
         }
     }
-    let ip = if !xff.is_empty() {
+    // Доверяем X-Forwarded-For только за доверенным прокси (TRUST_PROXY=1).
+    let trust_proxy = matches!(env("TRUST_PROXY", "").as_str(), "1" | "true");
+    let ip_raw = if trust_proxy && !xff.is_empty() {
         xff.split(',').next().unwrap_or("").trim().to_string()
     } else {
         request.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default()
     };
+    let ip = ip_raw.strip_prefix("::ffff:").unwrap_or(&ip_raw).to_string();
 
     if needs_ip_gate(&path) && !ip_allowed(db, &ip) {
         let _ = request.respond(Response::from_string("Access denied from this IP").with_status_code(403));
