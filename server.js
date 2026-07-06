@@ -134,6 +134,14 @@ if (dbTypeRow && dbTypeRow.value === 'postgresql') {
   }
 }
 
+// Гарантируем колонку warehouse_ids в PostgreSQL (в SQLite её добавляет миграция
+// в database.js). Ошибки игнорируем — приложение работает и без колонки.
+try {
+  if (dbAdapter.getType && dbAdapter.getType() === 'postgresql') {
+    db.prepare("ALTER TABLE managers ADD COLUMN IF NOT EXISTS warehouse_ids TEXT DEFAULT ''").run();
+  }
+} catch (e) {}
+
 let redisClient = null;
 let redisEnabled = false;
 
@@ -1006,7 +1014,8 @@ app.get('/api/manager/me', requireManager, async (req, res) => {
 app.get('/api/manager/slots', requireManager, async (req, res) => {
   const { date, type, warehouse_id } = req.query;
   // Ограничение видимости: не-админ видит только назначенные ему склады.
-  const mgr = db.prepare('SELECT warehouse_ids, is_admin FROM managers WHERE id = ?').get(req.session.managerId);
+  // SELECT * — чтобы не падать, если колонки warehouse_ids ещё нет (напр. старая БД).
+  const mgr = db.prepare('SELECT * FROM managers WHERE id = ?').get(req.session.managerId);
   const isAdmin = !!(mgr && (mgr.is_admin === 1 || mgr.is_admin === '1' || mgr.is_admin === true));
   const allowed = String((mgr && mgr.warehouse_ids) || '').split(',').map(s => s.trim()).filter(Boolean);
   const filterIds = warehouse_id ? String(warehouse_id).split(',').map(s => s.trim()).filter(Boolean) : [];
