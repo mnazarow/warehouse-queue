@@ -243,6 +243,7 @@ func main() {
 	}
 
 	go autobackupLoop()
+	go autoBanCleanupLoop()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/", apiRouter)

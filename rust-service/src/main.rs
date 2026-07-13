@@ -754,6 +754,26 @@ fn inc_captcha_fail(ip: &str) -> i32 {
 fn reset_captcha_fail(ip: &str) {
     captcha_fail_map().lock().unwrap().remove(ip);
 }
+
+// Счётчик неверных капч: при включённом Redis — в нём (общий для инстансов,
+// TTL 1 час), иначе — в памяти процесса.
+fn captcha_fail_inc(db: &mut Db, ip: &str) -> i32 {
+    if cache_enabled(db) {
+        let key = format!("captchafail:{ip}");
+        if let Some(RVal::Int(n)) = redis_one(db, &["INCR", key.as_str()]) {
+            redis_one(db, &["EXPIRE", key.as_str(), "3600"]);
+            return n as i32;
+        }
+    }
+    inc_captcha_fail(ip)
+}
+fn captcha_fail_reset(db: &mut Db, ip: &str) {
+    if cache_enabled(db) {
+        let key = format!("captchafail:{ip}");
+        redis_one(db, &["DEL", key.as_str()]);
+    }
+    reset_captcha_fail(ip);
+}
 fn is_loopback(ip: &str) -> bool {
     ip.is_empty() || ip == "127.0.0.1" || ip == "::1"
 }
@@ -2096,14 +2116,14 @@ fn h_book(db: &mut Db, sessions: &mut HashMap<String, Session>, ctx: &Ctx, id_st
     };
     if !captcha_ok {
         // Автоблокировка при неверной капче более 5 раз подряд с одного IP.
-        if !is_loopback(&ip) && inc_captcha_fail(&ip) > 5 && !ip_in_allowed_networks(db, &ip) {
+        if !is_loopback(&ip) && captcha_fail_inc(db, &ip) > 5 && !ip_in_allowed_networks(db, &ip) {
             auto_ban_ip(db, &ip, "Автоблокировка: неверная капча более 5 раз подряд");
-            reset_captcha_fail(&ip);
+            captcha_fail_reset(db, &ip);
             return Resp::err(403, "Слишком много неверных вводов капчи. Доступ заблокирован на сутки.");
         }
         return Resp::err(400, "Invalid captcha answer");
     }
-    reset_captcha_fail(&ip);
+    captcha_fail_reset(db, &ip);
     // Автоблокировка: более 3 заявок за сутки с IP не из разрешённых сетей.
     if !is_loopback(&ip) && !ip_in_allowed_networks(db, &ip) {
         let today = Local::now().format("%Y-%m-%d").to_string();
@@ -2597,6 +2617,22 @@ fn spawn_autobackup(backend: String, dsn: String) {
     });
 }
 
+// Раз в час удаляет истёкшие авто-баны (ручные не трогает).
+fn spawn_autoban_cleanup(backend: String, dsn: String) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(3600));
+        if let Ok(mut bdb) = Db::open(&backend, &dsn) {
+            let cutoff = (Local::now() - CDur::hours(24))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string();
+            bdb.exec(
+                "DELETE FROM banned_ips WHERE reason LIKE ? AND created_at < ?",
+                &[json!(format!("{}%", AUTO_BAN_PREFIX)), json!(cutoff)],
+            );
+        }
+    });
+}
+
 fn main() {
     let _ = START.set(Instant::now());
     let _ = STARTED.set(now_rfc3339());
@@ -2621,6 +2657,7 @@ fn main() {
     db::seed(&mut db).expect("seed");
 
     spawn_autobackup(backend.clone(), dsn.clone());
+    spawn_autoban_cleanup(backend.clone(), dsn.clone());
 
     let static_dir = env("STATIC_DIR", "../public");
     let private_dir = env("PRIVATE_DIR", "../private");

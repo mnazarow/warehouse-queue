@@ -130,6 +130,12 @@ Environment=DB_DSN=${DB_DSN}
 Environment=STATIC_DIR=${APP_DIR}/public
 Environment=PRIVATE_DIR=${APP_DIR}/private
 Environment=BACKUP_DIR=${APP_DIR}/backups"
+# За nginx включаем доверие к X-Forwarded-For, иначе IP-allowlist и автобаны
+# видят адрес прокси (127.0.0.1) вместо реального клиента.
+if [ "$WITH_NGINX" = "1" ]; then
+  ENV_LINES="${ENV_LINES}
+Environment=TRUST_PROXY=1"
+fi
 
 cat >/etc/systemd/system/${SERVICE}.service <<EOF
 [Unit]
@@ -196,3 +202,4 @@ fi
 echo "  Вход:    admin / admin123  ← ОБЯЗАТЕЛЬНО смените пароль"
 echo "  Логи:    journalctl -u ${SERVICE} -f"
 echo "  СУБД:    ${DB_BACKEND}"
+echo "  Удалить: sudo VARIANT=rust bash ${APP_DIR}/deploy/uninstall.sh   (PURGE_DATA=1 DROP_DB=1 — с данными)"

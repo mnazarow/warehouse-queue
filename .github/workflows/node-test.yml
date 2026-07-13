@@ -1,0 +1,33 @@
+name: Node tests
+
+# Прогоняет юнит-тесты (node:test) и синтакс-проверку основных файлов.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server.js'
+      - 'database.js'
+      - 'db-adapter.js'
+      - 'lib/**'
+      - 'test/**'
+      - 'package.json'
+      - '.github/workflows/node-test.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax check
+        run: |
+          node --check server.js
+          node --check database.js
+          node --check db-adapter.js
+      - name: Unit tests
+        run: npm test

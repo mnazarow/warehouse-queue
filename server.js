@@ -9,6 +9,7 @@ const { initDatabase, getDb, setDb, ensureSlotsExist, isWeekday, upsertCounterpa
 const redis = require('redis');
 const os = require('os');
 const { execFile } = require('child_process');
+const { ipToInt, isIPv4, ipInNetwork, normalizeWarehouseIds } = require('./lib/util');
 
 // Safety net: a DB/psql error inside an async route becomes a rejected promise
 // that Express 4 does not catch. Log it instead of letting it crash the server.
@@ -209,6 +210,24 @@ function redisGet(key) {
       resolve(err ? null : val);
     });
   });
+}
+
+// Атомарный счётчик с TTL (для лимита неверных капч). Возвращает текущее
+// значение, либо null если Redis недоступен — тогда вызывающий код падает на
+// счётчик в памяти процесса.
+function redisIncr(key, ttlSeconds) {
+  return new Promise(function(resolve) {
+    if (!redisClient || !redisEnabled) return resolve(null);
+    countRedisCall();
+    redisClient.incr(key, function(err, n) {
+      if (err) return resolve(null);
+      try { redisClient.expire(key, ttlSeconds, function() {}); } catch (e) {}
+      resolve(n);
+    });
+  });
+}
+function redisDel(key) {
+  if (redisClient && redisEnabled) { try { redisClient.del(key); } catch (e) {} }
 }
 
 // Configurable cache TTLs (seconds), grouped by cache-key category. Defaults
@@ -447,19 +466,14 @@ function autoBanIp(ip, reason) {
 
 function isLoopback(ip) { return !ip || ip === '127.0.0.1' || ip === '::1'; }
 
-// Нормализует список складов менеджера в массив числовых id-строк (без дублей).
-function normalizeWarehouseIds(warehouseIds, warehouseId) {
-  let arr = [];
-  if (Array.isArray(warehouseIds)) arr = warehouseIds;
-  else if (typeof warehouseIds === 'string' && warehouseIds) arr = warehouseIds.split(',');
-  else if (warehouseId != null && warehouseId !== '') arr = [warehouseId];
-  const out = [];
-  for (let v of arr) {
-    v = String(v).trim();
-    if (v && /^\d+$/.test(v) && out.indexOf(v) === -1) out.push(v);
-  }
-  return out;
-}
+// Раз в час удаляем истёкшие авто-баны (на случай, если IP не вернулся и не был
+// снят лениво в ipBanActive). Ручные баны не трогаем. Сравнение по тексту дат.
+setInterval(() => {
+  try {
+    const cutoff = new Date(Date.now() - AUTO_BAN_MS).toISOString().slice(0, 19).replace('T', ' ');
+    db.prepare("DELETE FROM banned_ips WHERE reason LIKE ? AND created_at < ?").run(AUTO_BAN_PREFIX + '%', cutoff);
+  } catch (e) {}
+}, 60 * 60 * 1000).unref();
 
 function logAction(userType, userName, action, details, slotId, ip, userAgent) {
   try {
@@ -845,18 +859,19 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   }
   if (req.session.captcha === undefined || Number(captchaAnswer) !== req.session.captcha) {
     // Автоблокировка при неверной капче более 5 раз подряд с одного IP.
+    // Счётчик — в Redis (общий для инстансов), с откатом в память при недоступности.
     if (!isLoopback(clientIp)) {
-      const f = (captchaFails.get(clientIp) || 0) + 1;
-      captchaFails.set(clientIp, f);
+      let f = await redisIncr('captchafail:' + clientIp, 3600);
+      if (f === null) { f = (captchaFails.get(clientIp) || 0) + 1; captchaFails.set(clientIp, f); }
       if (f > 5 && !ipInAllowedNetworks(clientIp)) {
         autoBanIp(clientIp, AUTO_BAN_PREFIX + ': неверная капча более 5 раз подряд');
-        captchaFails.delete(clientIp);
+        captchaFails.delete(clientIp); redisDel('captchafail:' + clientIp);
         return res.status(403).json({ error: 'Слишком много неверных вводов капчи. Доступ заблокирован на сутки.' });
       }
     }
     return res.status(400).json({ error: 'Invalid captcha answer' });
   }
-  captchaFails.delete(clientIp);
+  captchaFails.delete(clientIp); redisDel('captchafail:' + clientIp);
   delete req.session.captcha;
 
   if (account) {
@@ -1695,28 +1710,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Warehouse Queue System running on http://0.0.0.0:${PORT}`);
 });
 
-function ipToInt(ip) {
-  return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
-}
-
-function isIPv4(s) {
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
-}
-
-function ipInNetwork(clientIP, network) {
-  if (network.includes('/')) {
-    const [netIP, prefixStr] = network.split('/');
-    // IPv4 CIDR math only applies to IPv4 on both sides; for IPv6 (or mixed
-    // families) fall back to exact address match.
-    if (!isIPv4(clientIP) || !isIPv4(netIP)) return clientIP === netIP;
-    const prefix = parseInt(prefixStr, 10);
-    if (isNaN(prefix) || prefix < 0 || prefix > 32) return false;
-    const mask = prefix === 0 ? 0 : (~(2 ** (32 - prefix) - 1)) >>> 0;
-    return ((ipToInt(clientIP) & mask) >>> 0) === ((ipToInt(netIP) & mask) >>> 0);
-  }
-  return clientIP === network;
-}
-
 function requireAllowedIP(req, res, next) {
   const rawIP = req.ip || req.connection.remoteAddress || '';
   const clientIP = rawIP.replace(/^::ffff:/, '');
@@ -1831,8 +1824,10 @@ app.get('/api/manager/list', requireManager, async (req, res) => {
   const cacheKey = 'list';
   const cached = await redisGet(cacheKey);
   if (cached) return res.json(JSON.parse(cached));
+  // Явный список колонок — не отдаём password_hash клиенту.
   const managers = db.prepare(`
-    SELECT m.*, w.name AS warehouse_name
+    SELECT m.id, m.username, m.first_name, m.last_name, m.warehouse_id, m.warehouse_ids,
+           m.is_admin, w.name AS warehouse_name
     FROM managers m
     LEFT JOIN warehouses w ON w.id = m.warehouse_id
     ORDER BY m.id

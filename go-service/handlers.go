@@ -289,9 +289,9 @@ func hBook(w http.ResponseWriter, r *http.Request, idStr string) {
 	if !s.hasCap || int(ans) != s.captcha {
 		// Автоблокировка при неверной капче более 5 раз подряд с одного IP.
 		if !isLoopback(ip) {
-			if incCaptchaFail(ip) > 5 && !ipInAllowedNetworks(ip) {
+			if captchaFailInc(ip) > 5 && !ipInAllowedNetworks(ip) {
 				autoBanIP(ip, autoBanPrefix+": неверная капча более 5 раз подряд")
-				resetCaptchaFail(ip)
+				captchaFailReset(ip)
 				writeJSON(w, 403, map[string]any{"error": "Слишком много неверных вводов капчи. Доступ заблокирован на сутки."})
 				return
 			}
@@ -299,7 +299,7 @@ func hBook(w http.ResponseWriter, r *http.Request, idStr string) {
 		writeJSON(w, 400, map[string]any{"error": "Invalid captcha answer"})
 		return
 	}
-	resetCaptchaFail(ip)
+	captchaFailReset(ip)
 	s.hasCap = false
 
 	// Автоблокировка: более 3 заявок за сутки с IP, который не входит в

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,34 @@ func resetCaptchaFail(ip string) {
 	cfMu.Lock()
 	defer cfMu.Unlock()
 	delete(captchaFails, ip)
+}
+
+// captchaFailInc/Reset — счётчик неверных капч. При включённом Redis храним в нём
+// (общий для инстансов, TTL 1 час), иначе — в памяти процесса.
+func captchaFailInc(ip string) int {
+	if cacheEnabled() {
+		if rc := getRedis(); rc != nil {
+			key := "captchafail:" + ip
+			if v, err := rc.do("INCR", key); err == nil {
+				rc.do("EXPIRE", key, "3600")
+				if s, ok := v.(string); ok {
+					if n, e := strconv.Atoi(s); e == nil {
+						return n
+					}
+				}
+			}
+		}
+	}
+	return incCaptchaFail(ip)
+}
+
+func captchaFailReset(ip string) {
+	if cacheEnabled() {
+		if rc := getRedis(); rc != nil {
+			rc.do("DEL", "captchafail:"+ip)
+		}
+	}
+	resetCaptchaFail(ip)
 }
 
 func scalarInt(q string, args ...any) int {
@@ -78,4 +107,13 @@ func autoBanIP(ip, reason string) {
 
 func isLoopback(ip string) bool {
 	return ip == "" || ip == "127.0.0.1" || ip == "::1"
+}
+
+// autoBanCleanupLoop раз в час удаляет истёкшие авто-баны (ручные не трогает).
+func autoBanCleanupLoop() {
+	for {
+		time.Sleep(time.Hour)
+		cutoff := time.Now().Add(-autoBanHours * time.Hour).Format("2006-01-02 15:04:05")
+		db.ex("DELETE FROM banned_ips WHERE reason LIKE ? AND created_at < ?", autoBanPrefix+"%", cutoff)
+	}
 }
