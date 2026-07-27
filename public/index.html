@@ -29,6 +29,21 @@
 
     /* Окно записи всегда над маскотом/анимациями и прокручивается при нехватке высоты */
     #bookingModal { z-index: 10001; }
+
+    /* Модалка ожидания ответа 1С */
+    #loadingModal { z-index: 10002; background: rgba(0,0,0,0.55); }
+    #loadingModal .modal {
+      max-width: 340px; text-align: center; padding: 28px 24px;
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
+    }
+    #loadingModal .spinner {
+      width: 44px; height: 44px; border: 4px solid #e2e8f0; border-top-color: #3182ce;
+      border-radius: 50%; animation: lm-spin 0.9s linear infinite;
+    }
+    #loadingModal .lm-title { font-size: 1.05rem; font-weight: 600; color: #2d3748; }
+    #loadingModal .lm-hint { font-size: 0.85rem; color: #718096; line-height: 1.4; }
+    @keyframes lm-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #loadingModal .spinner { animation-duration: 2.4s; } }
     #bookingModal .modal { max-height: 92vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
     /* Мобильная оптимизация окна записи */
@@ -186,6 +201,9 @@
           <button class="btn btn-primary" onclick="forceBooking()" style="background:#dd6b20">Продолжить</button>
         </div>
       </div>
+      <div id="forceHint" style="display:none;margin-bottom:16px;padding:12px;background:#fffaf0;border:1px solid #f6ad55;border-radius:8px;font-size:0.9rem;color:#7b341e;line-height:1.4">
+        Решите новую капчу выше и нажмите «Записаться» — заявка будет отправлена без проверки счетов в 1С.
+      </div>
       <div class="form-group" style="margin-bottom:14px">
         <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.9rem;line-height:1.4">
           <input type="checkbox" id="consentCheck" style="width:18px;height:18px;margin-top:2px;cursor:pointer;flex-shrink:0">
@@ -199,6 +217,14 @@
         <button class="btn btn-secondary" onclick="closeModal()">Отмена</button>
         <button class="btn btn-primary" onclick="confirmBooking()" id="bookBtn">Записаться</button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="loadingModal" role="alertdialog" aria-live="assertive" aria-busy="true">
+    <div class="modal">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="lm-title" id="loadingModalTitle">Проверяем ваши заказы...</div>
+      <div class="lm-hint" id="loadingModalHint">Запрашиваем данные из 1С, это займёт несколько секунд. Не закрывайте страницу.</div>
     </div>
   </div>
 
@@ -287,10 +313,13 @@
           return;
         }
         let selectedId = null;
+        // Склад по умолчанию: помеченный is_default, иначе первый в списке —
+        // иначе ни одна карточка не активна и слоты не грузятся вовсе.
+        const defaultWh = data.warehouses.find(w => w.is_default) || data.warehouses[0];
         for (const w of data.warehouses) {
           const card = document.createElement('div');
           card.className = 'wh-card';
-          if (w.is_default) { card.classList.add('active'); selectedId = w.id; }
+          if (defaultWh && w.id === defaultWh.id) { card.classList.add('active'); selectedId = w.id; }
           card.dataset.id = w.id;
           card.dataset.name = w.name;
           card.textContent = w.name;
@@ -312,13 +341,19 @@
       if (!date) return;
       slotsContainer.innerHTML = '<p class="no-slots">Загрузка...</p>';
       try {
-        const res = await fetch(`/api/slots?date=${date}&type=${currentType}&warehouse_id=${warehouseId || ''}`);
+        const res = await fetch(`/api/slots?date=${encodeURIComponent(date)}&type=${encodeURIComponent(currentType)}&warehouse_id=${encodeURIComponent(warehouseId || '')}`);
         const data = await res.json();
-        if (!data.weekday) {
+        // Сначала HTTP-статус: при ошибке 4xx/5xx поля weekday в ответе нет,
+        // и без этой проверки пользователь видел «выберите будний день».
+        if (!res.ok || !data) {
+          slotsContainer.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
+          return;
+        }
+        if (data.weekday === false) {
           slotsContainer.innerHTML = '<p class="no-slots">Выберите будний день (пн–пт)</p>';
           return;
         }
-        if (!res.ok || !data || !Array.isArray(data.slots)) {
+        if (!Array.isArray(data.slots)) {
           slotsContainer.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
           return;
         }
@@ -424,6 +459,7 @@
       document.getElementById('vehicleClassSelect').value = '';
       document.getElementById('loadTypeSelect').value = '';
       document.getElementById('consentCheck').checked = false;
+      bookingForce = false;
       hideValidationError(); // сбрасывает ошибку, грузит капчу и очищает ответ
       try {
         const vcRes = await fetch('/api/public/vehicle-classes');
@@ -451,7 +487,21 @@
     function closeModal() {
       document.getElementById('bookingModal').classList.remove('open');
       selectedSlotId = null;
+      bookingForce = false;
       hideValidationError();
+    }
+
+    // Модалка ожидания: показывается на время запроса к серверу,
+    // внутри которого выполняется проверка счетов в 1С.
+    function showLoading(title, hint) {
+      document.getElementById('loadingModalTitle').textContent = title || 'Проверяем ваши заказы...';
+      document.getElementById('loadingModalHint').textContent =
+        hint || 'Запрашиваем данные из 1С, это займёт несколько секунд. Не закрывайте страницу.';
+      document.getElementById('loadingModal').classList.add('open');
+    }
+
+    function hideLoading() {
+      document.getElementById('loadingModal').classList.remove('open');
     }
 
     let bookingForce = false;
@@ -465,15 +515,22 @@
     function hideValidationError() {
       document.getElementById('validationErrorBlock').style.display = 'none';
       document.getElementById('bookBtn').style.display = 'inline-block';
+      const hint = document.getElementById('forceHint');
+      if (hint) hint.style.display = 'none';
       loadCaptcha();
       document.getElementById('captchaAnswer').value = '';
     }
 
-    async function forceBooking() {
+    // Капча на сервере одноразовая: после неудачной проверки счетов нужно
+    // решить новую. Поэтому здесь не отправляем заявку сразу, а включаем режим
+    // "всё равно записаться" и ждём, пока пользователь введёт новый ответ.
+    function forceBooking() {
       bookingForce = true;
       hideValidationError();
-      await confirmBooking();
-      bookingForce = false;
+      const hint = document.getElementById('forceHint');
+      if (hint) hint.style.display = 'block';
+      const answer = document.getElementById('captchaAnswer');
+      if (answer) answer.focus();
     }
 
     async function showPolicy(title, url) {
@@ -546,12 +603,23 @@
         const body = { name, phone, organization: organization || undefined, account: accounts.join('\n'), comment, captchaAnswer: Number(captchaAnswer), vehicleClassId: Number(vehicleClassId), loadTypeId: Number(loadTypeId) };
         if (bookingForce) body.force = true;
         const bookedSlotId = selectedSlotId;
-        const res = await fetch(`/api/slots/${bookedSlotId}/book`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-        const data = await res.json();
+        // Если указаны счета — сервер во время этого запроса обращается к 1С.
+        if (accounts.length) {
+          showLoading('Проверяем ваши заказы...', 'Запрашиваем данные из 1С, это займёт несколько секунд. Не закрывайте страницу.');
+        } else {
+          showLoading('Отправляем заявку...', 'Пожалуйста, подождите.');
+        }
+        let res, data;
+        try {
+          res = await fetch(`/api/slots/${bookedSlotId}/book`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          data = await res.json();
+        } finally {
+          hideLoading();
+        }
         if (!data.success) {
           if (data.validationFailed) {
             showValidationError(data.error);
@@ -566,10 +634,10 @@
           alert(data.error || 'Ошибка при записи');
           return;
         }
+        // Заявка на этот момент уже создана на сервере, поэтому предупреждение
+        // показываем как информацию, а не как вопрос «продолжить?».
         if (data.warning) {
-          if (!confirm(data.warning + '\n\nПродолжить запись?')) {
-            return;
-          }
+          alert('Заявка принята, но обратите внимание:\n\n' + data.warning);
         }
         const slotEl = document.querySelector(`.slot[data-id="${bookedSlotId}"]`);
         const bookedTime = slotEl?.querySelector('.time')?.textContent || '';
@@ -655,7 +723,14 @@
     loadWarehouses();
     loadAllowNoAccount();
     loadBookingMessage();
-    setInterval(loadSlots, 30000);
+    // Автообновление не должно перерисовывать сетку, пока открыто окно записи
+    // или идёт проверка в 1С — иначе выбранный слот «выдёргивается» из-под пользователя.
+    setInterval(function () {
+      const busy = document.querySelector('#bookingModal.open, #warehouseConfirmModal.open, #loadingModal.open, #successModal.open');
+      if (busy) return;
+      if (document.hidden) return;
+      loadSlots();
+    }, 30000);
     try { fetch('/api/visit', { method: 'POST' }).catch(function(){}); } catch (e) {}
     initCookieBanner();
 

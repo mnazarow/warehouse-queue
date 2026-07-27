@@ -508,12 +508,17 @@ function sendSms(phone, message) {
   const setting = db.prepare("SELECT value FROM settings WHERE key = 'smsru_api_key'").get();
   const apiKey = setting ? setting.value : (process.env.SMSRU_API_KEY || '');
   if (!apiKey || !phone) return;
-  const postData = `api_id=${apiKey}&to=${phone}&msg=${Buffer.from(message).toString('utf-8')}&json=1`;
+  // Параметры обязательно url-кодируются: без этого кириллица, пробелы и «&»
+  // в тексте ломали тело запроса к sms.ru.
+  const postData = `api_id=${encodeURIComponent(apiKey)}&to=${encodeURIComponent(phone)}&msg=${encodeURIComponent(message)}&json=1`;
   const req = https.request({
     hostname: 'sms.ru',
     path: '/sms/send',
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(postData)
+    }
   }, (res) => {
     let body = '';
     res.on('data', (chunk) => body += chunk);
@@ -527,10 +532,14 @@ function sendSms(phone, message) {
 function validateAccountsWith1C(accounts, validationUrl, username, password) {
   return new Promise((resolve) => {
     if (!validationUrl || !accounts.length) { logCheck(accounts, validationUrl, true, 0, '', 'No URL or accounts', ''); resolve({ valid: true, invalidAccounts: [] }); return; }
+    // Тело запроса объявлено вне try: иначе в catch ниже обращение к нему
+    // выбрасывало ReferenceError (переменная вне области видимости),
+    // и промис никогда не резолвился.
+    let reqBodyStr = '';
     try {
       const urlObj = new URL(validationUrl);
       const client = urlObj.protocol === 'https:' ? https : http;
-      const reqBodyStr = JSON.stringify({ invoce_number: accounts });
+      reqBodyStr = JSON.stringify({ invoce_number: accounts });
       const options = {
         hostname: urlObj.hostname,
         port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
@@ -874,6 +883,32 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   captchaFails.delete(clientIp); redisDel('captchafail:' + clientIp);
   delete req.session.captcha;
 
+  // Слот проверяем ДО обращения к 1С: незачем ждать внешний сервис (до 10 с),
+  // если слот уже занят, не существует или выходит за допустимое окно записи.
+  const slot = db.prepare(`
+    SELECT s.*, w.name AS warehouse_name, w.address AS warehouse_address
+    FROM slots s LEFT JOIN warehouses w ON w.id = s.warehouse_id WHERE s.id = ?
+  `).get(id);
+  if (!slot) {
+    return res.status(404).json({ error: 'Slot not found' });
+  }
+  if (slot.is_booked) {
+    return res.status(409).json({ error: 'Slot already booked' });
+  }
+  if (account && slot.type === 'small') {
+    const accountsArr = account.split('\n').map(a => a.trim()).filter(a => a);
+    if (accountsArr.length > 3) {
+      return res.status(400).json({ error: 'Вы указали более трех счетов в раздел До трех товаров в накладной, для отгрузки более трех товаров выберите раздел Сборный заказ' });
+    }
+  }
+  const slotMs = slotInstantMs(slot.date, slot.time_start);
+  if (slotMs <= Date.now() + 3600000) {
+    return res.status(400).json({ error: 'Слот можно забронировать минимум за 1 час' });
+  }
+  if (slotMs > Date.now() + bookingMaxDays() * 86400000) {
+    return res.status(400).json({ error: 'Нельзя записаться на дату дальше ' + bookingMaxDays() + ' дн. от текущей' });
+  }
+
   if (account) {
     const accounts = account.split('\n').map(a => a.trim()).filter(a => a);
     const valUrlSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_order_validation_url'").get();
@@ -944,29 +979,6 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
     }
   }
 
-  const slot = db.prepare(`
-    SELECT s.*, w.name AS warehouse_name, w.address AS warehouse_address
-    FROM slots s LEFT JOIN warehouses w ON w.id = s.warehouse_id WHERE s.id = ?
-  `).get(id);
-  if (!slot) {
-    return res.status(404).json({ error: 'Slot not found' });
-  }
-  if (slot.is_booked) {
-    return res.status(409).json({ error: 'Slot already booked' });
-  }
-  if (account && slot.type === 'small') {
-    const accountsArr = account.split('\n').map(a => a.trim()).filter(a => a);
-    if (accountsArr.length > 3) {
-      return res.status(400).json({ error: 'Вы указали более трех счетов в раздел До трех товаров в накладной, для отгрузки более трех товаров выберите раздел Сборный заказ' });
-    }
-  }
-  const slotMs = slotInstantMs(slot.date, slot.time_start);
-  if (slotMs <= Date.now() + 3600000) {
-    return res.status(400).json({ error: 'Слот можно забронировать минимум за 1 час' });
-  }
-  if (slotMs > Date.now() + bookingMaxDays() * 86400000) {
-    return res.status(400).json({ error: 'Нельзя записаться на дату дальше ' + bookingMaxDays() + ' дн. от текущей' });
-  }
   // Conditional update guards against the double-booking race: only one
   // concurrent request can flip is_booked 0 -> 1.
   const bookInfo = db.prepare(
