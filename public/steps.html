@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Запись на склад в три шага</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .page-switch { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+    .page-switch a { font-size: 0.9rem; color: #3182ce; text-decoration: none; }
+    .page-switch a:hover { text-decoration: underline; }
+
+    /* Индикатор шагов */
+    .stepper { display: flex; gap: 8px; margin: 0 0 20px; }
+    .stepper .st {
+      flex: 1; display: flex; flex-direction: column; gap: 6px; align-items: center;
+      font-size: 0.78rem; color: #a0aec0; text-align: center; line-height: 1.25;
+    }
+    .stepper .st .num {
+      width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center;
+      justify-content: center; font-weight: 700; background: #edf2f7; color: #a0aec0;
+      border: 2px solid #edf2f7; transition: all 0.15s ease;
+    }
+    .stepper .st.active .num { background: #3182ce; border-color: #3182ce; color: #fff; }
+    .stepper .st.active { color: #2d3748; font-weight: 600; }
+    .stepper .st.done .num { background: #c6f6d5; border-color: #38a169; color: #276749; }
+    .stepper .st.done { color: #4a5568; }
+
+    .wizard { border: 1px solid #e2e8f0; border-radius: 12px; padding: 22px; background: #fff; margin-top: 20px; }
+    .wizard-summary {
+      display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+      background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 20px; font-size: 0.9rem; color: #2d3748;
+    }
+    .wizard-summary b { color: #1a202c; }
+    .wizard-summary .wh { color: #e53e3e; font-weight: 700; }
+    .wizard-summary button { margin-left: auto; }
+
+    .step { display: none; }
+    .step.active { display: block; }
+    .step h3 { margin: 0 0 4px; font-size: 1.05rem; color: #2d3748; }
+    .step .step-hint { margin: 0 0 16px; font-size: 0.85rem; color: #718096; }
+
+    .field-error { display: none; margin-top: 4px; font-size: 0.82rem; color: #c53030; }
+    .form-group.invalid .field-error { display: block; }
+    .form-group.invalid input,
+    .form-group.invalid textarea,
+    .form-group.invalid select { border-color: #fc8181 !important; }
+
+    .wizard-actions { display: flex; gap: 10px; margin-top: 22px; }
+    .wizard-actions .spacer { flex: 1; }
+
+    .req { color: #e53e3e; }
+    .wizard textarea, .wizard select, .wizard input[type="text"], .wizard input[type="tel"], .wizard input[type="number"] {
+      width: 100%; padding: 10px 12px; border: 2px solid #e2e8f0; border-radius: 6px;
+      font-size: 1rem; font-family: inherit; background: #fff;
+    }
+    .wizard #captchaAnswer { width: 110px; text-align: center; }
+    .review-list { margin: 0 0 4px; padding: 0; list-style: none; font-size: 0.88rem; color: #4a5568; }
+    .review-list li { padding: 3px 0; border-bottom: 1px dashed #edf2f7; }
+    .review-list li:last-child { border-bottom: 0; }
+    .review-list span { color: #1a202c; font-weight: 600; }
+
+    /* Модалка ожидания ответа 1С */
+    #loadingModal { z-index: 10002; background: rgba(0,0,0,0.55); }
+    #loadingModal .modal {
+      max-width: 340px; text-align: center; padding: 28px 24px;
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
+    }
+    #loadingModal .spinner {
+      width: 44px; height: 44px; border: 4px solid #e2e8f0; border-top-color: #3182ce;
+      border-radius: 50%; animation: lm-spin 0.9s linear infinite;
+    }
+    #loadingModal .lm-title { font-size: 1.05rem; font-weight: 600; color: #2d3748; }
+    #loadingModal .lm-hint { font-size: 0.85rem; color: #718096; line-height: 1.4; }
+    @keyframes lm-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #loadingModal .spinner { animation-duration: 2.4s; } }
+
+    @media (max-width: 600px) {
+      .wizard { padding: 16px 14px; }
+      .stepper .st { font-size: 0.7rem; }
+      /* 16px против авто-зума полей в iOS */
+      .wizard input, .wizard textarea, .wizard select { font-size: 16px !important; }
+      .wizard-actions .btn { flex: 1; }
+      .wizard-actions .spacer { display: none; }
+      .wizard-summary button { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="page-switch"><a href="/">← Обычная форма записи (одно окно)</a></div>
+    <img src="/logo.png" alt="Логотип" class="logo">
+    <h1>Онлайн-запись на склад в три шага</h1>
+    <p class="subtitle">Выберите дату и время визита, затем заполните три коротких шага. Работаем в будние дни с 9:00 до 17:30.</p>
+    <div id="bookingMessageBanner" style="display:none;margin:0 0 16px;padding:12px 16px;background:#ebf8ff;border:1px solid #90cdf4;border-left:4px solid #3182ce;border-radius:8px;color:#2c5282;font-size:0.95rem;line-height:1.5;white-space:pre-wrap"></div>
+
+    <div id="pickerBlock">
+      <div class="tabs">
+        <button class="tab active" data-type="small">До 3-х товаров в накладной (15 мин)</button>
+        <button class="tab" data-type="bulk">Сборный заказ (30 мин)</button>
+      </div>
+
+      <div class="date-input">
+        <label for="datePicker">Дата:</label>
+        <input type="date" id="datePicker">
+      </div>
+
+      <div class="date-input" style="margin-top:12px">
+        <label style="font-size:1.2rem;font-weight:700;color:#e53e3e;display:block;margin-bottom:8px">Склад:</label>
+        <div id="warehouseSelector" class="warehouse-selector"></div>
+      </div>
+
+      <div id="slotsContainer">
+        <p class="no-slots">Выберите дату, чтобы увидеть свободные окна</p>
+      </div>
+    </div>
+
+    <div class="wizard" id="wizard" style="display:none">
+      <div class="wizard-summary">
+        <span>Запись: <b id="sumSlot"></b></span>
+        <span>Склад: <span class="wh" id="sumWarehouse"></span></span>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="cancelWizard()">Изменить время</button>
+      </div>
+
+      <div class="stepper">
+        <div class="st active" id="st1"><div class="num">1</div><div>Заказ и фирма</div></div>
+        <div class="st" id="st2"><div class="num">2</div><div>Контакты</div></div>
+        <div class="st" id="st3"><div class="num">3</div><div>Машина и подтверждение</div></div>
+      </div>
+
+      <!-- Шаг 1: заказ и фирма -->
+      <div class="step active" id="step1">
+        <h3>Шаг 1. Информация о заказе и фирме</h3>
+        <p class="step-hint">Укажите организацию и номера счетов — по ним заказ проверяется в 1С.</p>
+
+        <div class="form-group" id="fgOrganization">
+          <label for="customerOrganization">Организация <span style="color:#a0aec0;font-weight:400">(необязательно)</span></label>
+          <input type="text" id="customerOrganization" placeholder="ООО «Ромашка»">
+          <div class="field-error" id="errOrganization"></div>
+        </div>
+
+        <div class="form-group" id="fgAccount">
+          <label for="customerAccount" id="accountLabel">Номера счетов (до 10, каждый с новой строки)</label>
+          <textarea id="customerAccount" rows="4" placeholder="40817810000000000001&#10;40817810000000000002" style="resize:vertical"></textarea>
+          <div id="accountCounter" style="font-size:0.8rem;color:#718096;margin-top:4px">0 / 10</div>
+          <div class="field-error" id="errAccount"></div>
+        </div>
+
+        <div class="form-group" id="fgComment">
+          <label for="customerComment">Комментарий</label>
+          <textarea id="customerComment" rows="3" placeholder="Дополнительная информация к заказу" style="resize:vertical"></textarea>
+          <div class="field-error" id="errComment"></div>
+        </div>
+
+        <div class="wizard-actions">
+          <button class="btn btn-secondary" type="button" onclick="cancelWizard()">Отмена</button>
+          <div class="spacer"></div>
+          <button class="btn btn-primary" type="button" onclick="goStep(2)">Далее →</button>
+        </div>
+      </div>
+
+      <!-- Шаг 2: контакты -->
+      <div class="step" id="step2">
+        <h3>Шаг 2. Контакты</h3>
+        <p class="step-hint">На этот номер придёт SMS с подтверждением записи.</p>
+
+        <div class="form-group" id="fgName">
+          <label for="customerName">Ваше имя <span class="req">*</span></label>
+          <input type="text" id="customerName" placeholder="Иван Иванов">
+          <div class="field-error" id="errName"></div>
+        </div>
+
+        <div class="form-group" id="fgPhone">
+          <label for="customerPhone">Телефон <span class="req">*</span></label>
+          <input type="tel" id="customerPhone" placeholder="+7 (9XX) XXX-XX-XX">
+          <div class="field-error" id="errPhone"></div>
+        </div>
+
+        <div class="wizard-actions">
+          <button class="btn btn-secondary" type="button" onclick="goStep(1)">← Назад</button>
+          <div class="spacer"></div>
+          <button class="btn btn-primary" type="button" onclick="goStep(3)">Далее →</button>
+        </div>
+      </div>
+
+      <!-- Шаг 3: параметры машины и подтверждение -->
+      <div class="step" id="step3">
+        <h3>Шаг 3. Параметры машины и подтверждение</h3>
+        <p class="step-hint">Проверьте данные и подтвердите запись.</p>
+
+        <div class="form-group" id="fgVehicle">
+          <label for="vehicleClassSelect">Класс машины <span class="req">*</span></label>
+          <select id="vehicleClassSelect"><option value="">— Выберите —</option></select>
+          <div class="field-error" id="errVehicle"></div>
+        </div>
+
+        <div class="form-group" id="fgLoadType">
+          <label for="loadTypeSelect">Вид загрузки <span class="req">*</span></label>
+          <select id="loadTypeSelect"><option value="">— Выберите —</option></select>
+          <div class="field-error" id="errLoadType"></div>
+        </div>
+
+        <div class="form-group" style="background:#f7fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+          <label style="margin-bottom:6px">Проверьте данные</label>
+          <ul class="review-list" id="reviewList"></ul>
+        </div>
+
+        <div class="form-group" id="fgCaptcha">
+          <label>Капча: <strong id="captchaExpression">…</strong> <span class="req">*</span></label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="captchaAnswer" placeholder="?" autocomplete="off">
+            <button class="btn btn-secondary btn-sm" type="button" onclick="loadCaptcha()" style="white-space:nowrap">Обновить</button>
+          </div>
+          <div class="field-error" id="errCaptcha"></div>
+        </div>
+
+        <div id="validationErrorBlock" style="display:none;margin-bottom:16px;padding:14px;background:#fff5f5;border:2px solid #fc8181;border-radius:8px;text-align:center">
+          <div style="font-size:1rem;font-weight:600;color:#c53030;margin-bottom:8px" id="validationErrorMessage"></div>
+          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn-secondary" type="button" onclick="fixAccounts()">Исправить счета</button>
+            <button class="btn btn-primary" type="button" onclick="forceBooking()" style="background:#dd6b20">Всё равно записаться</button>
+          </div>
+        </div>
+
+        <div id="forceHint" style="display:none;margin-bottom:16px;padding:12px;background:#fffaf0;border:1px solid #f6ad55;border-radius:8px;font-size:0.9rem;color:#7b341e;line-height:1.4">
+          Решите новую капчу выше и нажмите «Записаться» — заявка будет отправлена без проверки счетов в 1С.
+        </div>
+
+        <div class="form-group" id="fgConsent" style="margin-bottom:14px">
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.9rem;line-height:1.4;font-weight:400">
+            <input type="checkbox" id="consentCheck" style="width:18px;height:18px;margin-top:2px;cursor:pointer;flex-shrink:0">
+            <span>Даю своё согласие на обработку и хранение персональных данных <span class="req">*</span></span>
+          </label>
+          <div style="margin-top:4px;margin-left:26px;font-size:0.85rem">
+            <a href="#" onclick="showPrivacy();return false">Политика обработки персональных данных</a>
+          </div>
+          <div class="field-error" id="errConsent" style="margin-left:26px"></div>
+        </div>
+
+        <div id="submitError" style="display:none;margin-bottom:14px;padding:12px 14px;background:#fff5f5;border:1px solid #fc8181;border-radius:8px;font-size:0.9rem;color:#c53030;line-height:1.4"></div>
+
+        <div class="wizard-actions">
+          <button class="btn btn-secondary" type="button" onclick="goStep(2)">← Назад</button>
+          <div class="spacer"></div>
+          <button class="btn btn-primary" type="button" onclick="submitBooking()" id="bookBtn">Записаться</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="loadingModal" role="alertdialog" aria-live="assertive" aria-busy="true">
+    <div class="modal">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="lm-title" id="loadingModalTitle">Проверяем ваши заказы...</div>
+      <div class="lm-hint" id="loadingModalHint">Запрашиваем данные из 1С, это займёт несколько секунд. Не закрывайте страницу.</div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="successModal">
+    <div class="modal" style="position:relative;overflow:hidden">
+      <div id="fireworks"></div>
+      <div class="success-msg open">
+        <h2>Вы записаны!</h2>
+        <p id="successInfo"></p>
+        <button class="btn btn-primary" type="button" onclick="closeSuccess()">Готово</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="policyModal" onclick="if(event.target===this)closePolicy()">
+    <div class="modal" style="max-width:720px;max-height:80vh;display:flex;flex-direction:column">
+      <h2 id="policyModalTitle" style="margin-top:0"></h2>
+      <div id="policyModalText" style="white-space:pre-wrap;overflow:auto;font-size:0.95rem;line-height:1.5;flex:1"></div>
+      <div class="modal-actions" style="margin-top:16px">
+        <button class="btn btn-secondary" type="button" onclick="closePolicy()">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cookieBanner" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#2d3748;color:#fff;padding:14px 18px;box-shadow:0 -2px 12px rgba(0,0,0,0.25)">
+    <div style="max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center">
+      <span style="font-size:0.9rem;line-height:1.4">Мы используем файлы cookie для вашего удобства. Продолжая пользоваться сайтом, вы соглашаетесь с <a href="#" onclick="showCookiePolicy();return false" style="color:#90cdf4">политикой использования cookie</a>.</span>
+      <button class="btn btn-primary" type="button" onclick="acceptCookies()">Принять</button>
+    </div>
+  </div>
+
+  <script>
+    const SLOT_NAMES = { small: 'До 3-х товаров в накладной', bulk: 'Сборный заказ' };
+    const MAX_ACCOUNTS_SMALL = 3;
+
+    let currentType = 'small';
+    let allowNoAccount = true;
+    let currentStep = 1;
+    let bookingForce = false;
+    let submitting = false;
+    // Выбранный слот: id, время и склад фиксируются в момент клика по окну.
+    let selected = null;
+
+    const $ = (id) => document.getElementById(id);
+    const datePicker = $('datePicker');
+    const slotsContainer = $('slotsContainer');
+
+    /* ---------- Выбор даты, склада и слота ---------- */
+
+    function initDate() {
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth() + 1).padStart(2, '0');
+      const d = String(today.getDate()).padStart(2, '0');
+      datePicker.value = `${y}-${m}-${d}`;
+      datePicker.min = `${y}-${m}-${d}`;
+    }
+
+    async function loadWarehouses() {
+      try {
+        const res = await fetch('/api/warehouses');
+        const data = await res.json();
+        const container = $('warehouseSelector');
+        container.innerHTML = '';
+        if (!res.ok || !data.warehouses || !data.warehouses.length) {
+          container.innerHTML = '<div class="no-slots">Нет складов</div>';
+          return;
+        }
+        // Склад по умолчанию: помеченный is_default, иначе первый в списке.
+        const defaultWh = data.warehouses.find(w => w.is_default) || data.warehouses[0];
+        for (const w of data.warehouses) {
+          const card = document.createElement('div');
+          card.className = 'wh-card';
+          if (defaultWh && w.id === defaultWh.id) card.classList.add('active');
+          card.dataset.id = w.id;
+          card.dataset.name = w.name;
+          card.textContent = w.name;
+          card.addEventListener('click', () => {
+            container.querySelectorAll('.wh-card').forEach(c => c.classList.remove('active'));
+            card.classList.add('active');
+            loadSlots();
+          });
+          container.appendChild(card);
+        }
+        loadSlots();
+      } catch (e) {
+        $('warehouseSelector').innerHTML = '<div class="no-slots">Не удалось загрузить склады</div>';
+      }
+    }
+
+    function activeWarehouse() {
+      const card = document.querySelector('#warehouseSelector .wh-card.active');
+      return card ? { id: card.dataset.id, name: card.dataset.name } : { id: '', name: '' };
+    }
+
+    async function loadSlots() {
+      const date = datePicker.value;
+      if (!date) return;
+      const wh = activeWarehouse();
+      slotsContainer.innerHTML = '<p class="no-slots">Загрузка...</p>';
+      try {
+        const res = await fetch(`/api/slots?date=${encodeURIComponent(date)}&type=${encodeURIComponent(currentType)}&warehouse_id=${encodeURIComponent(wh.id)}`);
+        const data = await res.json();
+        // Сначала HTTP-статус: при ошибке поля weekday в ответе нет.
+        if (!res.ok || !data) {
+          slotsContainer.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
+          return;
+        }
+        if (data.weekday === false) {
+          slotsContainer.innerHTML = '<p class="no-slots">Выберите будний день (пн–пт)</p>';
+          return;
+        }
+        if (!Array.isArray(data.slots)) {
+          slotsContainer.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
+          return;
+        }
+        if (!data.slots.length) {
+          slotsContainer.innerHTML = '<p class="no-slots">На выбранную дату слоты не найдены</p>';
+          return;
+        }
+        renderSlots(data.slots);
+      } catch (e) {
+        slotsContainer.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
+      }
+    }
+
+    // Сетка строится через DOM API: никаких onclick-строк с данными сервера.
+    function renderSlots(slots) {
+      const grid = document.createElement('div');
+      grid.className = 'slots-grid';
+      for (const slot of slots) {
+        let cssClass = '';
+        let labelText = 'Свободно';
+        let free = false;
+        if (slot.past) { cssClass = 'booked past'; labelText = 'Просрочено'; }
+        else if (slot.completed) { cssClass = 'booked completed'; labelText = 'Выполнено'; }
+        else if (slot.assembling) { cssClass = 'booked assembling'; labelText = 'На сборке'; }
+        else if (slot.in_progress) { cssClass = 'booked in-progress'; labelText = 'У кладовщика'; }
+        else if (slot.is_booked && slot.confirmed) { cssClass = 'booked confirmed'; labelText = 'Подтверждён'; }
+        else if (slot.is_booked) { cssClass = 'booked'; labelText = 'Занято'; }
+        else { free = true; }
+
+        const el = document.createElement('div');
+        el.className = 'slot' + (cssClass ? ' ' + cssClass : '');
+        el.dataset.id = slot.id;
+        const time = document.createElement('div');
+        time.className = 'time';
+        time.textContent = `${slot.time_start} – ${slot.time_end}`;
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = labelText;
+        el.appendChild(time);
+        el.appendChild(label);
+        if (free) {
+          el.addEventListener('click', () => startWizard(slot));
+        }
+        grid.appendChild(el);
+      }
+      slotsContainer.innerHTML = '';
+      slotsContainer.appendChild(grid);
+    }
+
+    /* ---------- Мастер из трёх шагов ---------- */
+
+    function startWizard(slot) {
+      const wh = activeWarehouse();
+      selected = {
+        id: slot.id,
+        date: datePicker.value,
+        timeStart: slot.time_start,
+        timeEnd: slot.time_end,
+        type: currentType,
+        warehouseName: wh.name
+      };
+      $('sumSlot').textContent = `${selected.date}, ${selected.timeStart}–${selected.timeEnd}, ${SLOT_NAMES[selected.type]}`;
+      $('sumWarehouse').textContent = wh.name || '—';
+      resetForm();
+      $('pickerBlock').style.display = 'none';
+      $('wizard').style.display = 'block';
+      goStep(1, true);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function cancelWizard() {
+      selected = null;
+      bookingForce = false;
+      $('wizard').style.display = 'none';
+      $('pickerBlock').style.display = 'block';
+      loadSlots();
+    }
+
+    function resetForm() {
+      ['customerOrganization', 'customerAccount', 'customerComment', 'customerName', 'customerPhone', 'captchaAnswer'].forEach(id => { $(id).value = ''; });
+      $('vehicleClassSelect').value = '';
+      $('loadTypeSelect').value = '';
+      $('consentCheck').checked = false;
+      bookingForce = false;
+      hideValidationError();
+      hideSubmitError();
+      updateAccountCounter();
+      document.querySelectorAll('.form-group.invalid').forEach(g => g.classList.remove('invalid'));
+    }
+
+    function setError(groupId, errorId, message) {
+      $(groupId).classList.add('invalid');
+      $(errorId).textContent = message;
+    }
+
+    function clearError(groupId) {
+      $(groupId).classList.remove('invalid');
+    }
+
+    // Проверка одного шага. Возвращает id первого поля с ошибкой либо null.
+    function validateStep(step) {
+      let firstBad = null;
+      const fail = (groupId, errorId, message, focusId) => {
+        setError(groupId, errorId, message);
+        if (!firstBad) firstBad = focusId;
+      };
+
+      if (step === 1) {
+        clearError('fgAccount');
+        const accounts = accountList();
+        if (!allowNoAccount && !accounts.length) {
+          fail('fgAccount', 'errAccount', 'Необходимо указать хотя бы один номер счёта', 'customerAccount');
+        } else if (accounts.length > 10) {
+          fail('fgAccount', 'errAccount', 'Не более 10 номеров счетов', 'customerAccount');
+        } else if (selected && selected.type === 'small' && accounts.length > MAX_ACCOUNTS_SMALL) {
+          fail('fgAccount', 'errAccount', 'В разделе «До 3-х товаров в накладной» можно указать не более трёх счетов. Для большего числа выберите «Сборный заказ».', 'customerAccount');
+        }
+      }
+
+      if (step === 2) {
+        clearError('fgName');
+        clearError('fgPhone');
+        if (!$('customerName').value.trim()) {
+          fail('fgName', 'errName', 'Укажите имя', 'customerName');
+        }
+        const digits = $('customerPhone').value.replace(/\D/g, '');
+        if (!digits) {
+          fail('fgPhone', 'errPhone', 'Укажите телефон', 'customerPhone');
+        } else if (digits.length !== 11) {
+          fail('fgPhone', 'errPhone', 'Телефон указан не полностью', 'customerPhone');
+        }
+      }
+
+      if (step === 3) {
+        clearError('fgVehicle');
+        clearError('fgLoadType');
+        clearError('fgCaptcha');
+        clearError('fgConsent');
+        if (!$('vehicleClassSelect').value) {
+          fail('fgVehicle', 'errVehicle', 'Выберите класс машины', 'vehicleClassSelect');
+        }
+        if (!$('loadTypeSelect').value) {
+          fail('fgLoadType', 'errLoadType', 'Выберите вид загрузки', 'loadTypeSelect');
+        }
+        if (!$('captchaAnswer').value.trim()) {
+          fail('fgCaptcha', 'errCaptcha', 'Решите капчу', 'captchaAnswer');
+        }
+        if (!$('consentCheck').checked) {
+          fail('fgConsent', 'errConsent', 'Без согласия на обработку персональных данных запись невозможна', 'consentCheck');
+        }
+      }
+      return firstBad;
+    }
+
+    // skipValidation — при первом открытии мастера и при возврате назад
+    // предыдущие шаги повторно не проверяем.
+    function goStep(step, skipValidation) {
+      if (!skipValidation && step > currentStep) {
+        for (let s = currentStep; s < step; s++) {
+          const bad = validateStep(s);
+          if (bad) {
+            showStep(s);
+            const el = $(bad);
+            if (el) el.focus();
+            return;
+          }
+        }
+      }
+      showStep(step);
+      if (step === 3) {
+        buildReview();
+        if (!$('vehicleClassSelect').dataset.loaded) loadVehicleClasses();
+        if (!$('loadTypeSelect').dataset.loaded) loadLoadTypes();
+        if (!$('captchaExpression').dataset.loaded) loadCaptcha();
+      }
+    }
+
+    function showStep(step) {
+      currentStep = step;
+      for (let s = 1; s <= 3; s++) {
+        $('step' + s).classList.toggle('active', s === step);
+        const chip = $('st' + s);
+        chip.classList.toggle('active', s === step);
+        chip.classList.toggle('done', s < step);
+      }
+    }
+
+    function fixAccounts() {
+      hideValidationError();
+      goStep(1, true);
+      $('customerAccount').focus();
+    }
+
+    function buildReview() {
+      const accounts = accountList();
+      const rows = [
+        ['Дата и время', selected ? `${selected.date}, ${selected.timeStart}–${selected.timeEnd}` : '—'],
+        ['Тип записи', selected ? SLOT_NAMES[selected.type] : '—'],
+        ['Склад', selected ? (selected.warehouseName || '—') : '—'],
+        ['Организация', $('customerOrganization').value.trim() || '—'],
+        ['Счета', accounts.length ? accounts.join(', ') : 'не указаны'],
+        ['Имя', $('customerName').value.trim() || '—'],
+        ['Телефон', $('customerPhone').value.trim() || '—']
+      ];
+      const ul = $('reviewList');
+      ul.innerHTML = '';
+      for (const [k, v] of rows) {
+        const li = document.createElement('li');
+        li.textContent = k + ': ';
+        const b = document.createElement('span');
+        b.textContent = v;
+        li.appendChild(b);
+        ul.appendChild(li);
+      }
+    }
+
+    function accountList() {
+      return $('customerAccount').value.split('\n').map(l => l.trim()).filter(l => l);
+    }
+
+    function updateAccountCounter() {
+      $('accountCounter').textContent = `${accountList().length} / 10`;
+    }
+
+    /* ---------- Справочники, капча, политики ---------- */
+
+    async function loadAllowNoAccount() {
+      try {
+        const res = await fetch('/api/public/settings/allow-booking-without-account');
+        const data = await res.json();
+        allowNoAccount = data.allow;
+      } catch (e) {}
+      $('accountLabel').innerHTML = allowNoAccount
+        ? 'Номера счетов (до 10, каждый с новой строки)'
+        : 'Номера счетов (до 10, каждый с новой строки) <span class="req">*</span>';
+    }
+
+    function fillSelect(sel, items) {
+      sel.innerHTML = '';
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = '— Выберите —';
+      sel.appendChild(empty);
+      for (const it of items) {
+        const o = document.createElement('option');
+        o.value = it.id;
+        o.textContent = it.name;
+        sel.appendChild(o);
+      }
+      sel.dataset.loaded = '1';
+    }
+
+    async function loadVehicleClasses() {
+      try {
+        const res = await fetch('/api/public/vehicle-classes');
+        const data = await res.json();
+        fillSelect($('vehicleClassSelect'), data.classes || []);
+      } catch (e) {}
+    }
+
+    async function loadLoadTypes() {
+      try {
+        const res = await fetch('/api/public/load-types');
+        const data = await res.json();
+        fillSelect($('loadTypeSelect'), data.types || []);
+      } catch (e) {}
+    }
+
+    async function loadCaptcha() {
+      try {
+        const res = await fetch('/api/captcha');
+        const data = await res.json();
+        const el = $('captchaExpression');
+        el.textContent = data.expression;
+        el.dataset.loaded = '1';
+      } catch (e) {}
+    }
+
+    async function showPolicy(title, url) {
+      $('policyModalTitle').textContent = title;
+      const t = $('policyModalText');
+      t.textContent = 'Загрузка...';
+      $('policyModal').classList.add('open');
+      try {
+        const res = await fetch(url);
+        const d = await res.json();
+        t.textContent = (d.text && d.text.trim()) ? d.text : 'Текст пока не задан.';
+      } catch (e) { t.textContent = 'Не удалось загрузить текст.'; }
+    }
+    function closePolicy() { $('policyModal').classList.remove('open'); }
+    function showPrivacy() { showPolicy('Политика обработки персональных данных', '/api/public/privacy-policy'); }
+    function showCookiePolicy() { showPolicy('Политика использования cookie', '/api/public/cookie-policy'); }
+    function acceptCookies() {
+      try { localStorage.setItem('cookie_consent', '1'); } catch (e) {}
+      $('cookieBanner').style.display = 'none';
+      document.body.style.paddingBottom = '';
+    }
+    function initCookieBanner() {
+      let ok = false;
+      try { ok = localStorage.getItem('cookie_consent') === '1'; } catch (e) {}
+      if (ok) return;
+      const banner = $('cookieBanner');
+      banner.style.display = 'block';
+      // Баннер фиксирован снизу и на узких экранах перекрывает кнопки шага —
+      // освобождаем под него место в конце страницы.
+      document.body.style.paddingBottom = (banner.offsetHeight + 16) + 'px';
+    }
+
+    async function loadBookingMessage() {
+      try {
+        const res = await fetch('/api/public/booking-message');
+        const d = await res.json();
+        const el = $('bookingMessageBanner');
+        if (d && d.text && d.text.trim()) { el.textContent = d.text; el.style.display = 'block'; }
+      } catch (e) {}
+    }
+
+    /* ---------- Отправка заявки ---------- */
+
+    function showLoading(title, hint) {
+      $('loadingModalTitle').textContent = title || 'Проверяем ваши заказы...';
+      $('loadingModalHint').textContent = hint || 'Запрашиваем данные из 1С, это займёт несколько секунд. Не закрывайте страницу.';
+      $('loadingModal').classList.add('open');
+    }
+    function hideLoading() { $('loadingModal').classList.remove('open'); }
+
+    function showSubmitError(msg) {
+      const el = $('submitError');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+    function hideSubmitError() { $('submitError').style.display = 'none'; }
+
+    function showValidationError(msg) {
+      hideSubmitError();
+      $('validationErrorMessage').textContent = msg;
+      $('validationErrorBlock').style.display = 'block';
+      $('bookBtn').style.display = 'none';
+    }
+
+    function hideValidationError() {
+      $('validationErrorBlock').style.display = 'none';
+      $('forceHint').style.display = 'none';
+      $('bookBtn').style.display = 'inline-block';
+    }
+
+    // Капча на сервере одноразовая: после неудачной проверки счетов нужно
+    // решить новую, поэтому заявка не отправляется сразу.
+    function forceBooking() {
+      bookingForce = true;
+      hideValidationError();
+      $('forceHint').style.display = 'block';
+      loadCaptcha();
+      $('captchaAnswer').value = '';
+      $('captchaAnswer').focus();
+    }
+
+    async function submitBooking() {
+      if (submitting || !selected) return;
+      hideSubmitError();
+      const bad = validateStep(3);
+      if (bad) { const el = $(bad); if (el) el.focus(); return; }
+
+      const accounts = accountList();
+      const body = {
+        name: $('customerName').value.trim(),
+        phone: $('customerPhone').value.replace(/\D/g, ''),
+        organization: $('customerOrganization').value.trim() || undefined,
+        account: accounts.join('\n'),
+        comment: $('customerComment').value.trim(),
+        captchaAnswer: Number($('captchaAnswer').value.trim()),
+        vehicleClassId: Number($('vehicleClassSelect').value),
+        loadTypeId: Number($('loadTypeSelect').value)
+      };
+      if (bookingForce) body.force = true;
+
+      const bookBtn = $('bookBtn');
+      submitting = true;
+      bookBtn.disabled = true;
+      // Если указаны счета — сервер во время этого запроса обращается к 1С.
+      if (accounts.length) {
+        showLoading('Проверяем ваши заказы...', 'Запрашиваем данные из 1С, это займёт несколько секунд. Не закрывайте страницу.');
+      } else {
+        showLoading('Отправляем заявку...', 'Пожалуйста, подождите.');
+      }
+      try {
+        let data;
+        try {
+          const res = await fetch(`/api/slots/${selected.id}/book`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          data = await res.json();
+        } finally {
+          hideLoading();
+        }
+
+        if (!data || !data.success) {
+          const err = (data && data.error) || 'Ошибка при записи';
+          if (data && data.validationFailed) {
+            showValidationError(err);
+            return;
+          }
+          if (err === 'Invalid captcha answer') {
+            setError('fgCaptcha', 'errCaptcha', 'Неверный ответ капчи');
+            loadCaptcha();
+            $('captchaAnswer').value = '';
+            $('captchaAnswer').focus();
+            return;
+          }
+          // Прочие отказы сервера (слот заняли, лимит заявок, чёрный список).
+          showSubmitError(err);
+          // Капча на сервере одноразовая — выдаём новую.
+          loadCaptcha();
+          $('captchaAnswer').value = '';
+          return;
+        }
+
+        // Заявка создана: предупреждение показываем как информацию.
+        if (data.warning) {
+          alert('Заявка принята, но обратите внимание:\n\n' + data.warning);
+        }
+        $('successInfo').textContent =
+          `${selected.date}, ${selected.timeStart}–${selected.timeEnd}, ${SLOT_NAMES[selected.type]}`;
+        $('successModal').classList.add('open');
+        startFireworks();
+        cancelWizard();
+      } catch (e) {
+        showSubmitError('Ошибка соединения. Проверьте интернет и попробуйте ещё раз.');
+        loadCaptcha();
+        $('captchaAnswer').value = '';
+      } finally {
+        submitting = false;
+        bookBtn.disabled = false;
+      }
+    }
+
+    function startFireworks() {
+      const container = $('fireworks');
+      container.innerHTML = '';
+      const colors = ['#e53e3e','#dd6b20','#d69e2e','#38a169','#3182ce','#805ad5','#d53f8c','#00bcd4'];
+      for (let i = 0; i < 60; i++) {
+        const el = document.createElement('div');
+        el.className = 'confetti';
+        el.style.left = Math.random() * 100 + '%';
+        el.style.top = Math.random() * 30 + '%';
+        el.style.background = colors[Math.floor(Math.random() * colors.length)];
+        el.style.width = (4 + Math.random() * 6) + 'px';
+        el.style.height = el.style.width;
+        el.style.animationDelay = Math.random() * 0.8 + 's';
+        el.style.borderRadius = Math.random() > 0.5 ? '50%' : '2px';
+        container.appendChild(el);
+      }
+    }
+
+    function closeSuccess() { $('successModal').classList.remove('open'); }
+
+    /* ---------- Инициализация ---------- */
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentType = tab.dataset.type;
+        loadSlots();
+      });
+    });
+
+    datePicker.addEventListener('change', loadSlots);
+    datePicker.addEventListener('input', loadSlots);
+
+    $('customerAccount').addEventListener('input', () => { updateAccountCounter(); clearError('fgAccount'); });
+    $('customerName').addEventListener('input', () => clearError('fgName'));
+    $('vehicleClassSelect').addEventListener('change', () => clearError('fgVehicle'));
+    $('loadTypeSelect').addEventListener('change', () => clearError('fgLoadType'));
+    $('captchaAnswer').addEventListener('input', () => clearError('fgCaptcha'));
+    $('consentCheck').addEventListener('change', () => clearError('fgConsent'));
+
+    $('customerPhone').addEventListener('input', function () {
+      clearError('fgPhone');
+      let v = this.value.replace(/\D/g, '');
+      if (!v.startsWith('7') && v.length > 0) v = '7' + v;
+      v = v.slice(0, 11);
+      let m = '+7';
+      if (v.length > 1) m += ' (' + v.slice(1, 4);
+      if (v.length >= 5) m += ') ' + v.slice(4, 7);
+      if (v.length >= 8) m += '-' + v.slice(7, 9);
+      if (v.length >= 10) m += '-' + v.slice(9, 11);
+      this.value = m;
+    });
+
+    initDate();
+    loadWarehouses();
+    loadAllowNoAccount();
+    loadBookingMessage();
+    initCookieBanner();
+    try { fetch('/api/visit', { method: 'POST' }).catch(function () {}); } catch (e) {}
+
+    // Автообновление сетки — только когда мастер закрыт и вкладка активна.
+    setInterval(function () {
+      if (selected) return;
+      if (document.hidden) return;
+      loadSlots();
+    }, 30000);
+  </script>
+</body>
+</html>

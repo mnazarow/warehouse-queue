@@ -529,6 +529,75 @@ function sendSms(phone, message) {
   req.end();
 }
 
+/* ---------- Контакты менеджера заказа для SMS ---------- */
+
+// Телефон менеджера приходит из 1С внутри строки managerName
+// (например «Иванов Иван Иванович, +7 (999) 123-45-67»).
+// В SMS клиенту он попадает, только если распознан как корректный российский
+// номер: 11 цифр, начинается с 7 (8 приводится к 7), либо 10 цифр мобильного,
+// начинающихся с 9. Всё остальное (внутренние номера, обрывки, случайные цифры)
+// считается указанным неверно и в сообщение не идёт.
+function extractRuPhone(text) {
+  if (!text) return '';
+  const matches = String(text).match(/\+?\d[\d\s\-()]{8,}\d/g);
+  if (!matches) return '';
+  for (const raw of matches) {
+    let d = raw.replace(/\D/g, '');
+    if (d.length === 11 && d[0] === '8') d = '7' + d.slice(1);
+    else if (d.length === 10 && d[0] === '9') d = '7' + d;
+    if (d.length === 11 && d[0] === '7') return d;
+  }
+  return '';
+}
+
+// Имя менеджера без телефона и служебных разделителей, сокращённое до
+// «Фамилия И.О.» — SMS с кириллицей тарифицируется по 70 символов на сегмент.
+function managerDisplayName(raw) {
+  let s = String(raw || '')
+    .replace(/\+?\d[\d\s\-()]{8,}\d/g, ' ')
+    .replace(/(тел|тлф|моб|phone)\.?:?/gi, ' ')
+    .replace(/[,;|/\\]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (!s) return '';
+  const parts = s.split(' ').filter(Boolean);
+  if (parts.length >= 2 && parts.length <= 3 && parts.every(p => p.length > 1)) {
+    const initials = parts.slice(1).map(p => p[0].toUpperCase() + '.').join('');
+    s = parts[0] + ' ' + initials;
+  }
+  return s.length > 30 ? s.slice(0, 29).trim() + '…' : s;
+}
+
+// До `limit` уникальных менеджеров (по номеру) для указанных клиентом счетов.
+function managerContactsForAccounts(accounts, limit) {
+  const max = limit || 2;
+  const contacts = [];
+  const seen = new Set();
+  for (const acc of accounts) {
+    let order = null;
+    try {
+      order = db.prepare('SELECT managerName FROM orders_1c WHERE accountNumber = ? AND managerName <> \'\' ').get(acc);
+    } catch { order = null; }
+    if (!order || !order.managerName) continue;
+    const phone = extractRuPhone(order.managerName);
+    if (!phone || seen.has(phone)) continue;
+    seen.add(phone);
+    contacts.push({ name: managerDisplayName(order.managerName), phone });
+    if (contacts.length >= max) break;
+  }
+  return contacts;
+}
+
+function managerSmsSuffix(account) {
+  if (!account) return '';
+  const accounts = String(account).split('\n').map(a => a.trim()).filter(a => a);
+  if (!accounts.length) return '';
+  const contacts = managerContactsForAccounts(accounts, 2);
+  if (!contacts.length) return '';
+  const list = contacts.map(c => (c.name ? c.name + ' ' : '') + '+' + c.phone).join(', ');
+  return '. Менеджер' + (contacts.length > 1 ? 'ы' : '') + ' заказа: ' + list;
+}
+
 function validateAccountsWith1C(accounts, validationUrl, username, password) {
   return new Promise((resolve) => {
     if (!validationUrl || !accounts.length) { logCheck(accounts, validationUrl, true, 0, '', 'No URL or accounts', ''); resolve({ valid: true, invalidAccounts: [] }); return; }
@@ -996,7 +1065,10 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   const typeLabel = slot.type === 'small' ? 'До 3-х товаров' : 'Сборный заказ';
   const dayNames = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
   const dayName = dayNames[new Date(slot.date + 'T00:00:00').getDay()];
-  sendSms(phone, `Вы записаны на ${slot.date} (${dayName}) ${slot.time_start}–${slot.time_end}, ${typeLabel}, склад ${whName}${whAddr}`);
+  // Телефон менеджера заказа добавляется, только если он корректно распознан
+  // в данных 1С по указанным клиентом счетам.
+  const managerSuffix = managerSmsSuffix(account);
+  sendSms(phone, `Вы записаны на ${slot.date} (${dayName}) ${slot.time_start}–${slot.time_end}, ${typeLabel}, склад ${whName}${whAddr}${managerSuffix}`);
   redisFlushSlotsCache();
   res.json({ success: true, warning: bookingWarning || undefined });
   } catch (err) {
