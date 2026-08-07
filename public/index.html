@@ -125,7 +125,7 @@
     </div>
 
     <div class="date-input" style="margin-top:12px">
-      <label style="font-size:1.2rem;font-weight:700;color:#e53e3e;display:block;margin-bottom:8px">Склад:</label>
+      <label style="font-size:1.2rem;font-weight:700;color:#e53e3e;display:block;margin-bottom:8px">Выберите склад:</label>
       <div id="warehouseSelector" class="warehouse-selector"></div>
     </div>
 
@@ -234,11 +234,12 @@
   <div id="whFireworks" style="position:fixed;inset:0;pointer-events:none;z-index:10000;overflow:hidden"></div>
 
   <div class="modal-overlay" id="successModal">
-    <div class="modal" style="position:relative;overflow:hidden">
+    <div class="modal" style="position:relative;overflow:hidden;max-width:520px;max-height:92vh;overflow-y:auto">
       <div id="fireworks"></div>
       <div class="success-msg open">
         <h2>Вы записаны!</h2>
         <p id="successInfo"></p>
+        <div id="successDirections" style="display:none"></div>
         <button class="btn btn-primary" onclick="closeSuccess()">Готово</button>
       </div>
     </div>
@@ -292,6 +293,7 @@
       }
     }
     let selectedWarehouseName = '';
+    let selectedWarehouseId = '';
     let pendingSlot = {};
 
     const datePicker = document.getElementById('datePicker');
@@ -431,6 +433,7 @@
       const activeCard = document.querySelector('#warehouseSelector .wh-card.active');
       const whName = activeCard ? activeCard.dataset.name : '';
       selectedWarehouseName = whName;
+      selectedWarehouseId = activeCard ? activeCard.dataset.id : '';
       document.getElementById('warehouseConfirmInfo').textContent =
         `${datePicker.value}, ${timeStart}–${timeEnd}, ${SLOT_NAMES[currentType]}`;
       document.getElementById('warehouseConfirmName').textContent = whName;
@@ -666,6 +669,8 @@
         }
         document.getElementById('successInfo').textContent =
           `${datePicker.value}, ${bookedTime}, ${SLOT_NAMES[currentType]}`;
+        // Подробная схема проезда до выбранного склада
+        WhDirections.render(selectedWarehouseId, document.getElementById('successDirections'));
         document.getElementById('successModal').classList.add('open');
         startFireworks();
       } catch (e) {

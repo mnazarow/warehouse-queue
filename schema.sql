@@ -17,7 +17,10 @@ CREATE TABLE IF NOT EXISTS warehouses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   address TEXT DEFAULT '',
-  is_default INTEGER NOT NULL DEFAULT 0
+  is_default INTEGER NOT NULL DEFAULT 0,
+  directions TEXT DEFAULT '',              -- описание, как доехать
+  map_scheme TEXT DEFAULT '',              -- схема проезда (картинка, data-URL)
+  route_moscow TEXT DEFAULT ''             -- маршрут из Москвы (шаги, по строке)
 );
 
 CREATE TABLE IF NOT EXISTS slots (
@@ -67,6 +70,8 @@ CREATE TABLE IF NOT EXISTS load_types      (id INTEGER PRIMARY KEY AUTOINCREMENT
 CREATE TABLE IF NOT EXISTS categories      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
 -- Справочник логистов: ФИО и телефон (хранится цифрами, 11 знаков, с 7 в начале).
 CREATE TABLE IF NOT EXISTS logisticians    (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT DEFAULT '', created_at TEXT DEFAULT '');
+-- Журнал бронирований для статистики: не пропадает при отмене брони.
+CREATE TABLE IF NOT EXISTS booking_events  (id INTEGER PRIMARY KEY AUTOINCREMENT, slot_id INTEGER DEFAULT 0, created_at TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS counterparties  (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT DEFAULT '', inn TEXT DEFAULT '', kpp TEXT DEFAULT '', comment TEXT DEFAULT '');
 
 -- IP-allowlist для кабинета/кладовщика (пустой список = доступ открыт).

@@ -864,6 +864,48 @@
           <div id="bookingMinMinutesStatus" style="color:#38a169;margin-top:8px;display:none"></div>
         </div>
 
+        <div class="section-header" style="margin-top:24px">
+          <h2>Внешнее API</h2>
+        </div>
+        <div style="max-width:760px;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:20px">
+          <div class="form-group" style="margin-bottom:12px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
+              <input type="checkbox" id="extApiEnabled" style="width:18px;height:18px;cursor:pointer" onchange="saveExtApiEnabled()">
+              <span>Разрешить оформление и управление записью с других сайтов</span>
+            </label>
+            <div id="extApiStatus" style="color:#38a169;margin-top:6px;display:none;font-size:0.85rem"></div>
+          </div>
+          <div class="form-group" style="margin-bottom:12px">
+            <label>API-ключ (передаётся в заголовке X-Api-Key)</label>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input type="text" id="extApiKey" readonly style="flex:1;min-width:260px;font-family:monospace;font-size:0.82rem" placeholder="— ключ появится после включения —">
+              <button class="btn btn-secondary btn-sm" type="button" onclick="copyExtApiKey()">Копировать</button>
+              <button class="btn btn-secondary btn-sm" type="button" onclick="regenerateExtApiKey()">Перегенерировать</button>
+            </div>
+            <div style="font-size:0.8rem;color:#718096;margin-top:6px">После перегенерации старый ключ перестаёт действовать — обновите его на внешнем сайте.</div>
+          </div>
+          <details style="font-size:0.85rem;color:#4a5568">
+            <summary style="cursor:pointer;font-weight:600;margin-bottom:8px">Справка по методам API</summary>
+            <div style="overflow-x:auto">
+            <table style="border-collapse:collapse;width:100%;font-size:0.8rem">
+              <tr><th style="text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0">Метод</th><th style="text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0">Назначение</th></tr>
+              <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/ping</code></td><td style="padding:4px 8px">Проверка ключа и доступности</td></tr>
+              <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/warehouses</code></td><td style="padding:4px 8px">Склады (с адресом и описанием проезда)</td></tr>
+              <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/vehicle-classes</code>, <code>/load-types</code></td><td style="padding:4px 8px">Справочники для полей записи</td></tr>
+              <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/slots?date=&type=&warehouse_id=</code></td><td style="padding:4px 8px">Окна на дату (type: small | bulk)</td></tr>
+              <tr><td style="padding:4px 8px"><code>POST /api/ext/v1/bookings</code></td><td style="padding:4px 8px">Оформить запись: slotId, name, phone, vehicleClassId, loadTypeId, account?, organization?, comment?, force?</td></tr>
+              <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/bookings/:slotId</code></td><td style="padding:4px 8px">Данные записи и её статус</td></tr>
+              <tr><td style="padding:4px 8px"><code>DELETE /api/ext/v1/bookings/:slotId</code></td><td style="padding:4px 8px">Отменить запись (те же запреты, что у клиента)</td></tr>
+            </table>
+            </div>
+            <div style="margin-top:8px;font-size:0.78rem">Пример:</div>
+            <pre style="background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;font-size:0.74rem;overflow-x:auto">curl -X POST https://ваш-домен/api/ext/v1/bookings \
+  -H "X-Api-Key: КЛЮЧ" -H "Content-Type: application/json" \
+  -d '{"slotId":123,"name":"Иван","phone":"79991234567","vehicleClassId":1,"loadTypeId":1,"account":"40817..."}'</pre>
+            <div style="margin-top:6px;font-size:0.78rem;color:#718096">Проверки 1С, SMS клиенту и статистика работают так же, как при записи на сайте. Капча для API не требуется.</div>
+          </details>
+        </div>
+
         <div class="form-group" style="margin-bottom:16px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
             <input type="checkbox" id="settingsMascot" style="width:18px;height:18px;cursor:pointer" onchange="saveSettingsMascot()">
@@ -1483,6 +1525,23 @@
         <input type="text" id="newWarehouseAddress" placeholder="ул. Ленина, 1">
       </div>
       <div class="form-group">
+        <label>Как доехать (показывается клиенту после записи)</label>
+        <textarea id="newWarehouseDirections" rows="3" placeholder="Съезд с МКАД на..., далее вторые ворота, пропуск у охраны" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Маршрут из Москвы (по шагам, каждый шаг с новой строки)</label>
+        <textarea id="newWarehouseRouteMoscow" rows="3" placeholder="По М-4 «Дон» до 23-го км&#10;Съезд «Видное», направо&#10;400 м вдоль забора до вторых ворот" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
+        <div style="font-size:0.78rem;color:#718096;margin-top:4px">По шагам строится нарисованная схема «Москва → склад» в окне «Вы записаны!»; склад на ней отмечен логотипом.</div>
+      </div>
+      <div class="form-group">
+        <label>Схема проезда (картинка PNG/JPG, до 1 МБ)</label>
+        <input type="file" id="newWarehouseScheme" accept="image/*" onchange="readSchemeFile(this,'new')">
+        <div id="newWarehouseSchemePreview" style="display:none;margin-top:8px">
+          <img style="max-width:100%;max-height:140px;border:1px solid #e2e8f0;border-radius:8px">
+          <button class="btn btn-secondary btn-sm" type="button" onclick="clearSchemeFile('new')" style="display:block;margin-top:6px">Убрать схему</button>
+        </div>
+      </div>
+      <div class="form-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="newWarehouseDefault"> Склад по умолчанию
         </label>
@@ -1507,6 +1566,23 @@
       <div class="form-group">
         <label>Адрес</label>
         <input type="text" id="editWarehouseAddress">
+      </div>
+      <div class="form-group">
+        <label>Как доехать (показывается клиенту после записи)</label>
+        <textarea id="editWarehouseDirections" rows="3" placeholder="Съезд с МКАД на..., далее вторые ворота, пропуск у охраны" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Маршрут из Москвы (по шагам, каждый шаг с новой строки)</label>
+        <textarea id="editWarehouseRouteMoscow" rows="3" placeholder="По М-4 «Дон» до 23-го км&#10;Съезд «Видное», направо&#10;400 м вдоль забора до вторых ворот" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
+        <div style="font-size:0.78rem;color:#718096;margin-top:4px">По шагам строится нарисованная схема «Москва → склад» в окне «Вы записаны!»; склад на ней отмечен логотипом.</div>
+      </div>
+      <div class="form-group">
+        <label>Схема проезда (картинка PNG/JPG, до 1 МБ)</label>
+        <input type="file" id="editWarehouseScheme" accept="image/*" onchange="readSchemeFile(this,'edit')">
+        <div id="editWarehouseSchemePreview" style="display:none;margin-top:8px">
+          <img style="max-width:100%;max-height:140px;border:1px solid #e2e8f0;border-radius:8px">
+          <button class="btn btn-secondary btn-sm" type="button" onclick="clearSchemeFile('edit')" style="display:block;margin-top:6px">Убрать схему</button>
+        </div>
       </div>
       <div class="form-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -2353,6 +2429,14 @@
         const res = await fetch('/api/manager/stats/timeseries?metric=' + metric + '&interval=' + encodeURIComponent(sel.value), { credentials: 'include' });
         const d = await res.json();
         if (!res.ok) { el.textContent = 'Ошибка: ' + (d.error || res.status); return; }
+        const sum = (d.counts || []).reduce((a, b) => a + b, 0);
+        if (sum === 0) {
+          // Пустое окно — объясняем, а не рисуем «пустой график».
+          el.textContent = (d.total > 0)
+            ? 'За выбранный период данных нет (всего за всю историю: ' + d.total + '). Выберите интервал крупнее — например «По неделям» или «По годам».'
+            : 'Данных пока нет';
+          return;
+        }
         renderBarChart(el, d.labels || [], d.counts || []);
       } catch (e) { el.textContent = 'Ошибка: ' + e.message; }
     }
@@ -2647,7 +2731,60 @@
         const bmRes = await fetch('/api/manager/settings/booking-min-minutes', { credentials: 'include' });
         const bmData = await bmRes.json();
         document.getElementById('settingsBookingMinMinutes').value = (bmData.minutes !== undefined && bmData.minutes !== null) ? bmData.minutes : 45;
+
+        const extRes = await fetch('/api/manager/settings/ext-api', { credentials: 'include' });
+        if (extRes.ok) {
+          const extData = await extRes.json();
+          document.getElementById('extApiEnabled').checked = !!extData.enabled;
+          document.getElementById('extApiKey').value = extData.key || '';
+        }
       } catch {}
+    }
+
+    function extApiFlash(msg, isError) {
+      const el = document.getElementById('extApiStatus');
+      el.textContent = msg;
+      el.style.color = isError ? '#e53e3e' : '#38a169';
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 3000);
+    }
+
+    async function saveExtApiEnabled() {
+      const enabled = document.getElementById('extApiEnabled').checked;
+      try {
+        const res = await fetch('/api/manager/settings/ext-api', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', body: JSON.stringify({ enabled })
+        });
+        const d = await res.json();
+        if (!res.ok || !d.success) throw new Error(d.error || 'Ошибка');
+        document.getElementById('extApiKey').value = d.key || '';
+        extApiFlash(enabled ? 'Внешнее API включено' : 'Внешнее API выключено');
+      } catch (e) { extApiFlash('Ошибка: ' + e.message, true); }
+    }
+
+    async function regenerateExtApiKey() {
+      if (!confirm('Перегенерировать ключ? Старый ключ сразу перестанет работать.')) return;
+      try {
+        const res = await fetch('/api/manager/settings/ext-api/regenerate', { method: 'POST', credentials: 'include' });
+        const d = await res.json();
+        if (!res.ok || !d.success) throw new Error(d.error || 'Ошибка');
+        document.getElementById('extApiKey').value = d.key;
+        extApiFlash('Новый ключ создан');
+      } catch (e) { extApiFlash('Ошибка: ' + e.message, true); }
+    }
+
+    function copyExtApiKey() {
+      const val = document.getElementById('extApiKey').value;
+      if (!val) { extApiFlash('Ключа пока нет — включите API', true); return; }
+      try {
+        navigator.clipboard.writeText(val);
+        extApiFlash('Ключ скопирован');
+      } catch (e) {
+        document.getElementById('extApiKey').select();
+        document.execCommand('copy');
+        extApiFlash('Ключ скопирован');
+      }
     }
 
     async function saveBookingMinMinutes() {
@@ -3450,9 +3587,41 @@
       } catch {}
     }
 
+    // Схемы проезда (data-URL картинки) для окон добавления/изменения склада.
+    const schemeData = { new: '', edit: '' };
+
+    function readSchemeFile(input, kind) {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      if (!/^image\//.test(file.type)) { alert('Выберите картинку (PNG, JPG)'); input.value = ''; return; }
+      if (file.size > 1024 * 1024) { alert('Картинка больше 1 МБ — уменьшите её и попробуйте снова'); input.value = ''; return; }
+      const reader = new FileReader();
+      reader.onload = function () {
+        schemeData[kind] = String(reader.result || '');
+        showSchemePreview(kind);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function showSchemePreview(kind) {
+      const box = document.getElementById(kind === 'new' ? 'newWarehouseSchemePreview' : 'editWarehouseSchemePreview');
+      const img = box.querySelector('img');
+      if (schemeData[kind]) { img.src = schemeData[kind]; box.style.display = 'block'; }
+      else { img.src = ''; box.style.display = 'none'; }
+    }
+
+    function clearSchemeFile(kind) {
+      schemeData[kind] = '';
+      document.getElementById(kind === 'new' ? 'newWarehouseScheme' : 'editWarehouseScheme').value = '';
+      showSchemePreview(kind);
+    }
+
     function openCreateWarehouseModal() {
       document.getElementById('newWarehouseName').value = '';
       document.getElementById('newWarehouseAddress').value = '';
+      document.getElementById('newWarehouseDirections').value = '';
+      document.getElementById('newWarehouseRouteMoscow').value = '';
+      clearSchemeFile('new');
       document.getElementById('newWarehouseDefault').checked = false;
       document.getElementById('createWarehouseError').style.display = 'none';
       document.getElementById('createWarehouseSuccess').style.display = 'none';
@@ -3476,7 +3645,12 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ name, address: address || undefined, isDefault })
+        body: JSON.stringify({
+          name, address: address || undefined, isDefault,
+          directions: document.getElementById('newWarehouseDirections').value.trim(),
+          routeMoscow: document.getElementById('newWarehouseRouteMoscow').value.trim(),
+          mapScheme: schemeData.new
+        })
       });
       const data = await res.json();
       if (!data.success) { errEl.textContent = data.error || 'Ошибка'; errEl.style.display = 'block'; return; }
@@ -3484,6 +3658,9 @@
       successEl.style.display = 'block';
       document.getElementById('newWarehouseName').value = '';
       document.getElementById('newWarehouseAddress').value = '';
+      document.getElementById('newWarehouseDirections').value = '';
+      document.getElementById('newWarehouseRouteMoscow').value = '';
+      clearSchemeFile('new');
       document.getElementById('newWarehouseDefault').checked = false;
       loadWarehouses();
     }
@@ -3502,6 +3679,11 @@
         if (!w) return;
         document.getElementById('editWarehouseName').value = w.name;
         document.getElementById('editWarehouseAddress').value = w.address || '';
+        document.getElementById('editWarehouseDirections').value = w.directions || '';
+        document.getElementById('editWarehouseRouteMoscow').value = w.route_moscow || '';
+        schemeData.edit = w.map_scheme || '';
+        document.getElementById('editWarehouseScheme').value = '';
+        showSchemePreview('edit');
         document.getElementById('editWarehouseDefault').checked = !!w.is_default;
       } catch {}
     }
@@ -3524,7 +3706,12 @@
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ name, address: address || undefined, isDefault })
+        body: JSON.stringify({
+          name, address: address || undefined, isDefault,
+          directions: document.getElementById('editWarehouseDirections').value.trim(),
+          routeMoscow: document.getElementById('editWarehouseRouteMoscow').value.trim(),
+          mapScheme: schemeData.edit
+        })
       });
       const data = await res.json();
       if (!data.success) { errEl.textContent = data.error || 'Ошибка'; errEl.style.display = 'block'; return; }
@@ -4840,7 +5027,14 @@
           document.getElementById('loginView').style.display = 'block';
           return;
         }
-        const data = await res.json();
+        let data = null;
+        try { data = await res.json(); } catch (e) {}
+        if (!res.ok || !data) {
+          container.innerHTML = '<p class="no-slots">' + (res.status === 404
+            ? 'Сервер не знает этот запрос — перезапустите приложение (обновлённый server.js ещё не применён)'
+            : 'Ошибка загрузки (HTTP ' + res.status + ')') + '</p>';
+          return;
+        }
         if (!data.logisticians || !data.logisticians.length) {
           container.innerHTML = '<div class="empty-state">Нет логистов</div>';
           return;
@@ -4913,14 +5107,21 @@
           credentials: 'include',
           body: JSON.stringify({ name, phone })
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          showLogisticianError(data.error || 'Ошибка сохранения');
+        // Ответ разбираем аккуратно: старый процесс сервера отвечает
+        // на неизвестный запрос страницей 404 (HTML), а не JSON.
+        let data = null;
+        try { data = await res.json(); } catch (e) {}
+        if (!res.ok || !data || !data.success) {
+          if (res.status === 404 && !data) {
+            showLogisticianError('Сервер не знает этот запрос — перезапустите приложение (обновлённый server.js ещё не применён)');
+          } else {
+            showLogisticianError((data && data.error) || ('Ошибка сохранения (HTTP ' + res.status + ')'));
+          }
           return;
         }
         closeLogisticianModal();
         loadLogisticians();
-      } catch { showLogisticianError('Ошибка сети'); }
+      } catch { showLogisticianError('Нет соединения с сервером — проверьте, что приложение запущено'); }
     }
 
     async function deleteLogistician(id) {

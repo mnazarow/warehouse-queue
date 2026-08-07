@@ -107,7 +107,7 @@
       </div>
 
       <div class="date-input" style="margin-top:12px">
-        <label style="font-size:1.2rem;font-weight:700;color:#e53e3e;display:block;margin-bottom:8px">Склад:</label>
+        <label style="font-size:1.2rem;font-weight:700;color:#e53e3e;display:block;margin-bottom:8px">Выберите склад:</label>
         <div id="warehouseSelector" class="warehouse-selector"></div>
       </div>
 
@@ -258,11 +258,12 @@
   </div>
 
   <div class="modal-overlay" id="successModal">
-    <div class="modal" style="position:relative;overflow:hidden">
+    <div class="modal" style="position:relative;overflow:hidden;max-width:520px;max-height:92vh;overflow-y:auto">
       <div id="fireworks"></div>
       <div class="success-msg open">
         <h2>Вы записаны!</h2>
         <p id="successInfo"></p>
+        <div id="successDirections" style="display:none"></div>
         <button class="btn btn-primary" type="button" onclick="closeSuccess()">Готово</button>
       </div>
     </div>
@@ -435,7 +436,8 @@
         timeStart: slot.time_start,
         timeEnd: slot.time_end,
         type: currentType,
-        warehouseName: wh.name
+        warehouseName: wh.name,
+        warehouseId: wh.id
       };
       $('sumSlot').textContent = `${selected.date}, ${selected.timeStart}–${selected.timeEnd}, ${SLOT_NAMES[selected.type]}`;
       $('sumWarehouse').textContent = wh.name || '—';
@@ -804,6 +806,8 @@
         }
         $('successInfo').textContent =
           `${selected.date}, ${selected.timeStart}–${selected.timeEnd}, ${SLOT_NAMES[selected.type]}`;
+        // Подробная схема проезда до выбранного склада
+        WhDirections.render(selected.warehouseId, $('successDirections'));
         $('successModal').classList.add('open');
         startFireworks();
         cancelWizard();

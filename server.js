@@ -851,6 +851,22 @@ app.get('/api/warehouses', (req, res) => {
   res.json({ warehouses: list });
 });
 
+// Как доехать до склада: показывается клиенту в окне «Вы записаны!».
+// Схема-картинка может быть тяжёлой, поэтому отдаётся отдельным запросом,
+// а не в общем списке складов.
+app.get('/api/warehouses/:id/directions', (req, res) => {
+  const wh = db.prepare('SELECT id, name, address, directions, map_scheme, route_moscow FROM warehouses WHERE id = ?').get(req.params.id);
+  if (!wh) return res.status(404).json({ error: 'Warehouse not found' });
+  res.json({
+    id: wh.id,
+    name: wh.name,
+    address: wh.address || '',
+    directions: wh.directions || '',
+    mapScheme: wh.map_scheme || '',
+    routeMoscow: wh.route_moscow || ''
+  });
+});
+
 function worksOnWeekends() {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'work_on_weekends'").get();
   return row ? row.value === '1' : false;
@@ -1101,6 +1117,9 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   if (autoConfirmSlot) {
     db.prepare("UPDATE slots SET confirmed = 1, confirmed_at = datetime('now') WHERE id = ?").run(id);
   }
+  // Событие для графика «Бронирования»: живёт отдельно от слота,
+  // не пропадает при отмене брони.
+  try { db.prepare("INSERT INTO booking_events (slot_id, created_at) VALUES (?, datetime('now'))").run(Number(id)); } catch (e) {}
   logAction('client', name + ' (' + phone + ')', 'Бронирование', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date + (account ? ', счета: ' + account.replace(/\n/g, ', ') : ''), Number(id), getIp(req), getUserAgent(req));
   const whName = slot.warehouse_name || '';
   const whAddr = slot.warehouse_address ? ` (${slot.warehouse_address})` : '';
@@ -2630,22 +2649,38 @@ app.get('/api/manager/warehouses', requireManager, async (req, res) => {
   res.json(response);
 });
 
+// Схема проезда: только картинка data-URL разумного размера.
+function validateMapScheme(mapScheme) {
+  if (!mapScheme) return { value: '' };
+  const s = String(mapScheme);
+  if (!/^data:image\/(png|jpe?g|gif|webp);base64,/.test(s)) {
+    return { error: 'Схема должна быть картинкой (PNG, JPG, GIF или WebP)' };
+  }
+  if (s.length > 2 * 1024 * 1024) {
+    return { error: 'Схема слишком большая (максимум ~1.5 МБ)' };
+  }
+  return { value: s };
+}
+
 app.post('/api/manager/warehouses', requireManager, (req, res) => {
-  const { name, address, isDefault } = req.body;
+  const { name, address, isDefault, directions, mapScheme, routeMoscow } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Name is required' });
   }
+  const scheme = validateMapScheme(mapScheme);
+  if (scheme.error) return res.status(400).json({ error: scheme.error });
   if (isDefault) {
     db.prepare('UPDATE warehouses SET is_default = 0').run();
   }
-  db.prepare('INSERT INTO warehouses (name, address, is_default) VALUES (?, ?, ?)').run(name.trim(), address || '', isDefault ? 1 : 0);
+  db.prepare('INSERT INTO warehouses (name, address, is_default, directions, map_scheme, route_moscow) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(name.trim(), address || '', isDefault ? 1 : 0, directions || '', scheme.value, routeMoscow || '');
   redisFlushByPrefix('warehouses');
   res.json({ success: true });
 });
 
 app.put('/api/manager/warehouses/:id', requireManager, (req, res) => {
   const { id } = req.params;
-  const { name, address, isDefault } = req.body;
+  const { name, address, isDefault, directions, mapScheme } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Name is required' });
   }
@@ -2653,10 +2688,20 @@ app.put('/api/manager/warehouses/:id', requireManager, (req, res) => {
   if (!wh) {
     return res.status(404).json({ error: 'Warehouse not found' });
   }
+  // directions/mapScheme/routeMoscow могут не прийти от старых форм — тогда не трогаем.
+  const newDirections = directions !== undefined ? String(directions) : (wh.directions || '');
+  const newRouteMoscow = req.body.routeMoscow !== undefined ? String(req.body.routeMoscow) : (wh.route_moscow || '');
+  let newScheme = wh.map_scheme || '';
+  if (mapScheme !== undefined) {
+    const scheme = validateMapScheme(mapScheme);
+    if (scheme.error) return res.status(400).json({ error: scheme.error });
+    newScheme = scheme.value;
+  }
   if (isDefault) {
     db.prepare('UPDATE warehouses SET is_default = 0').run();
   }
-  db.prepare('UPDATE warehouses SET name = ?, address = ?, is_default = ? WHERE id = ?').run(name.trim(), address || '', isDefault ? 1 : 0, id);
+  db.prepare('UPDATE warehouses SET name = ?, address = ?, is_default = ?, directions = ?, map_scheme = ?, route_moscow = ? WHERE id = ?')
+    .run(name.trim(), address || '', isDefault ? 1 : 0, newDirections, newScheme, newRouteMoscow, id);
   redisFlushByPrefix('warehouses');
   res.json({ success: true });
 });
@@ -2948,10 +2993,13 @@ app.get('/api/manager/stats/timeseries', requireManager, (req, res) => {
       const since = new Date(buckets[0].start).toISOString();
       timestamps = db.prepare('SELECT visited_at FROM page_visits WHERE visited_at >= ?').all(since).map(r => r.visited_at);
     } else {
-      timestamps = db.prepare("SELECT booked_at FROM slots WHERE booked_at IS NOT NULL").all().map(r => r.booked_at);
+      // Журнал бронирований: история не зависит от текущего состояния слотов.
+      timestamps = db.prepare('SELECT created_at FROM booking_events').all().map(r => r.created_at);
     }
     countInto(buckets, timestamps);
-    res.json({ interval: interval, metric: metric, labels: buckets.map(b => b.label), counts: buckets.map(b => b.count) });
+    // total — всего событий за всю историю: интерфейс подсказывает сменить
+    // интервал, когда в выбранном окне пусто, а данные вообще есть.
+    res.json({ interval: interval, metric: metric, labels: buckets.map(b => b.label), counts: buckets.map(b => b.count), total: timestamps.length });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
@@ -3661,6 +3709,243 @@ app.delete('/api/manager/logisticians/:id', requireManager, (req, res) => {
   db.prepare('DELETE FROM logisticians WHERE id = ?').run(id);
   redisFlushByPrefix('logisticians');
   res.json({ success: true });
+});
+
+/* ==========================================================================
+   Внешнее API (v1): оформление и управление записью с другого сайта.
+   Доступ по ключу из настроек (заголовок X-Api-Key или Authorization: Bearer).
+   Включается тумблером в настройках кабинета; ключ можно перегенерировать.
+   ========================================================================== */
+
+function extApiEnabled() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'ext_api_enabled'").get();
+  return row ? row.value === '1' : false;
+}
+
+function extApiKey() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'ext_api_key'").get();
+  return row ? row.value : '';
+}
+
+// CORS: внешние сайты обращаются из браузера с другого домена.
+app.use('/api/ext', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+function requireExtApi(req, res, next) {
+  if (!extApiEnabled()) {
+    return res.status(503).json({ error: 'Внешнее API выключено в настройках' });
+  }
+  const key = extApiKey();
+  const header = req.headers['x-api-key'] || String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+  if (!key || !header || header !== key) {
+    return res.status(401).json({ error: 'Неверный API-ключ' });
+  }
+  next();
+}
+
+app.get('/api/ext/v1/ping', requireExtApi, (req, res) => {
+  res.json({ ok: true, version: 'v1' });
+});
+
+app.get('/api/ext/v1/warehouses', requireExtApi, (req, res) => {
+  const list = db.prepare('SELECT id, name, address, is_default, directions, route_moscow FROM warehouses ORDER BY is_default DESC, name').all();
+  res.json({ warehouses: list });
+});
+
+app.get('/api/ext/v1/vehicle-classes', requireExtApi, (req, res) => {
+  res.json({ classes: db.prepare('SELECT id, name, description FROM vehicle_classes ORDER BY name').all() });
+});
+
+app.get('/api/ext/v1/load-types', requireExtApi, (req, res) => {
+  res.json({ types: db.prepare('SELECT id, name, description FROM load_types ORDER BY name').all() });
+});
+
+app.get('/api/ext/v1/slots', requireExtApi, (req, res) => {
+  const { date, type, warehouse_id } = req.query;
+  if (!date || !type) return res.status(400).json({ error: 'Параметры date и type обязательны' });
+  if (!['small', 'bulk'].includes(type)) return res.status(400).json({ error: 'type: small или bulk' });
+  if (!isWeekday(date) && !worksOnWeekends()) return res.json({ slots: [], weekday: false });
+  ensureSlotsExist(date, type);
+  const whId = warehouse_id || null;
+  const slots = db.prepare(
+    'SELECT id, date, type, time_start, time_end, is_booked, confirmed, in_progress, completed, assembling, warehouse_id FROM slots WHERE date = ? AND type = ? AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL)) ORDER BY time_start'
+  ).all(date, type, whId, whId);
+  const minMs = Date.now() + bookingMinMs();
+  const maxMs = Date.now() + bookingMaxDays() * 86400000;
+  res.json({
+    weekday: true,
+    slots: slots.map(s => {
+      const inst = slotInstantMs(s.date, s.time_start);
+      return { ...s, past: inst <= minMs || inst > maxMs };
+    })
+  });
+});
+
+// Оформление записи. Капча не нужна — доступ уже подтверждён API-ключом.
+// Проверки те же, что на сайте: слот, лимиты счетов, чёрный список, 1С.
+app.post('/api/ext/v1/bookings', requireExtApi, async (req, res) => {
+  try {
+    const { slotId, name: nameRaw, phone: phoneRaw, account, comment, organization: org, vehicleClassId, loadTypeId, force } = req.body || {};
+    let organization = org;
+    if (!slotId || !nameRaw || !phoneRaw) {
+      return res.status(400).json({ error: 'Обязательные поля: slotId, name, phone' });
+    }
+    if (!vehicleClassId || !loadTypeId) {
+      return res.status(400).json({ error: 'Обязательные поля: vehicleClassId, loadTypeId' });
+    }
+    const name = String(nameRaw).trim();
+    const phone = String(phoneRaw).trim();
+    if (db.prepare('SELECT id FROM banned_phones WHERE phone = ?').get(phone)) {
+      return res.status(403).json({ error: 'Номер телефона находится в чёрном списке' });
+    }
+    const accounts = account ? String(account).split('\n').map(a => a.trim()).filter(a => a) : [];
+    if (accounts.length > 10) {
+      return res.status(400).json({ error: 'Не более 10 номеров счетов' });
+    }
+    const allowNoAccountSetting = db.prepare("SELECT value FROM settings WHERE key = 'allow_booking_without_account'").get();
+    const allowNoAccount = allowNoAccountSetting ? allowNoAccountSetting.value !== '0' : true;
+    if (!allowNoAccount && !accounts.length) {
+      return res.status(400).json({ error: 'Необходимо указать номер счета' });
+    }
+
+    const slot = db.prepare(`
+      SELECT s.*, w.name AS warehouse_name, w.address AS warehouse_address
+      FROM slots s LEFT JOIN warehouses w ON w.id = s.warehouse_id WHERE s.id = ?
+    `).get(slotId);
+    if (!slot) return res.status(404).json({ error: 'Слот не найден' });
+    if (slot.is_booked) return res.status(409).json({ error: 'Слот уже занят' });
+    if (accounts.length > 3 && slot.type === 'small') {
+      return res.status(400).json({ error: 'Для слота «До 3-х товаров» — не более трёх счетов; выберите сборный заказ' });
+    }
+    const slotMs = slotInstantMs(slot.date, slot.time_start);
+    if (slotMs <= Date.now() + bookingMinMs()) {
+      return res.status(400).json({ error: 'Слот можно забронировать минимум за ' + bookingMinMinutes() + ' мин. до начала' });
+    }
+    if (slotMs > Date.now() + bookingMaxDays() * 86400000) {
+      return res.status(400).json({ error: 'Нельзя записаться на дату дальше ' + bookingMaxDays() + ' дн. от текущей' });
+    }
+
+    let bookingWarning = '';
+    let autoConfirmSlot = false;
+    if (accounts.length) {
+      const valUrlSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_order_validation_url'").get();
+      const validationUrl = valUrlSetting ? valUrlSetting.value : '';
+      if (validationUrl) {
+        const userSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_username'").get();
+        const passSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_password'").get();
+        const username = userSetting ? userSetting.value : '';
+        const password = passSetting ? passSetting.value : '';
+        const result = await validateAccountsWith1C(accounts, validationUrl, username, password);
+        if (!organization && result.customerName) organization = result.customerName;
+        if (!result.valid) {
+          const allowInvalidSetting = db.prepare("SELECT value FROM settings WHERE key = 'allow_booking_with_invalid_account'").get();
+          const allowInvalid = allowInvalidSetting ? allowInvalidSetting.value === '1' : false;
+          const msg = result.invalidAccounts.length
+            ? 'Счёт не найден в 1С: ' + result.invalidAccounts.join(', ')
+            : 'Один или несколько счетов не найдены в 1С';
+          if (!allowInvalid && !force) {
+            return res.status(400).json({ error: msg, validationFailed: true, invalidAccounts: result.invalidAccounts });
+          }
+          bookingWarning = msg;
+        } else {
+          const payUrlSetting = db.prepare("SELECT value FROM settings WHERE key = '1c_payment_check_url'").get();
+          const paymentCheckUrl = payUrlSetting ? payUrlSetting.value : '';
+          if (paymentCheckUrl) {
+            const payResult = await checkPaymentWith1C(accounts, paymentCheckUrl, username, password);
+            if (!payResult.paid && payResult.unpaidAccounts.length) {
+              const payMsg = 'Не оплачены счета: ' + payResult.unpaidAccounts.join(', ');
+              bookingWarning = bookingWarning ? bookingWarning + '; ' + payMsg : payMsg;
+            }
+            const readyResult = await checkReadyWith1C(accounts, paymentCheckUrl, username, password);
+            if (readyResult.allReady) autoConfirmSlot = true;
+          }
+        }
+      }
+    }
+
+    const bookInfo = db.prepare(
+      "UPDATE slots SET is_booked = 1, customer_name = ?, customer_phone = ?, customer_account = ?, customer_comment = ?, customer_organization = ?, booked_at = datetime('now'), customer_ip = ?, customer_user_agent = ?, vehicle_class_id = ?, load_type_id = ? WHERE id = ? AND is_booked = 0"
+    ).run(name, phone, accounts.join('\n') || null, comment || null, organization || null, getIp(req), 'ext-api', vehicleClassId, loadTypeId, slotId);
+    if (!bookInfo || bookInfo.changes === 0) {
+      return res.status(409).json({ error: 'Слот уже занят' });
+    }
+    if (autoConfirmSlot) {
+      db.prepare("UPDATE slots SET confirmed = 1, confirmed_at = datetime('now') WHERE id = ?").run(slotId);
+    }
+    try { db.prepare("INSERT INTO booking_events (slot_id, created_at) VALUES (?, datetime('now'))").run(Number(slotId)); } catch (e) {}
+    logAction('ext-api', name + ' (' + phone + ')', 'Бронирование через API', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date, Number(slotId), getIp(req), getUserAgent(req));
+    const typeLabel = slot.type === 'small' ? 'До 3-х товаров' : 'Сборный заказ';
+    const dayNames = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+    const dayName = dayNames[new Date(slot.date + 'T00:00:00').getDay()];
+    const whName = slot.warehouse_name || '';
+    const whAddr = slot.warehouse_address ? ` (${slot.warehouse_address})` : '';
+    sendSms(phone, `Вы записаны на ${slot.date} (${dayName}) ${slot.time_start}–${slot.time_end}, ${typeLabel}, склад ${whName}${whAddr}${managerSmsSuffix(accounts.join('\n'))}`);
+    redisFlushSlotsCache();
+    res.json({ success: true, slotId: Number(slotId), confirmed: autoConfirmSlot, warning: bookingWarning || undefined });
+  } catch (err) {
+    console.error('Ext API booking error:', err);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// Просмотр записи по слоту (только занятые).
+app.get('/api/ext/v1/bookings/:slotId', requireExtApi, (req, res) => {
+  const slot = db.prepare(`
+    SELECT s.*, w.name AS warehouse_name, w.address AS warehouse_address,
+           vc.name AS vehicle_class_name, lt.name AS load_type_name
+    FROM slots s
+    LEFT JOIN warehouses w ON w.id = s.warehouse_id
+    LEFT JOIN vehicle_classes vc ON vc.id = s.vehicle_class_id
+    LEFT JOIN load_types lt ON lt.id = s.load_type_id
+    WHERE s.id = ?
+  `).get(req.params.slotId);
+  if (!slot || !slot.is_booked) return res.status(404).json({ error: 'Запись не найдена' });
+  res.json({ success: true, booking: publicBookingView(slot) });
+});
+
+// Отмена записи. Действуют те же запреты, что и у клиента на сайте.
+app.delete('/api/ext/v1/bookings/:slotId', requireExtApi, (req, res) => {
+  const slot = db.prepare('SELECT * FROM slots WHERE id = ?').get(req.params.slotId);
+  if (!slot || !slot.is_booked) return res.status(404).json({ error: 'Запись не найдена' });
+  const blocked = cancelBlockReason(slot);
+  if (blocked) return res.status(409).json({ error: blocked });
+  const info = db.prepare(
+    "UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ? AND is_booked = 1"
+  ).run(slot.id);
+  if (!info || info.changes === 0) return res.status(409).json({ error: 'Запись уже изменена' });
+  logAction('ext-api', (slot.customer_name || '') + ' (' + (slot.customer_phone || '') + ')', 'Отмена записи через API',
+    'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date, Number(slot.id), getIp(req), getUserAgent(req));
+  redisFlushSlotsCache();
+  res.json({ success: true });
+});
+
+/* --- Настройки внешнего API в кабинете --- */
+
+app.get('/api/manager/settings/ext-api', requireManager, (req, res) => {
+  res.json({ enabled: extApiEnabled(), key: extApiKey() });
+});
+
+app.post('/api/manager/settings/ext-api', requireManager, (req, res) => {
+  const enabled = !!(req.body && req.body.enabled);
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ext_api_enabled', ?)").run(enabled ? '1' : '0');
+  // Первый запуск: ключа ещё нет — создаём сразу, чтобы API было рабочим.
+  if (enabled && !extApiKey()) {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ext_api_key', ?)").run(crypto.randomBytes(24).toString('hex'));
+  }
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Внешнее API', enabled ? 'Включил' : 'Выключил', 0, getIp(req), getUserAgent(req));
+  res.json({ success: true, enabled, key: extApiKey() });
+});
+
+app.post('/api/manager/settings/ext-api/regenerate', requireManager, (req, res) => {
+  const key = crypto.randomBytes(24).toString('hex');
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ext_api_key', ?)").run(key);
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Внешнее API', 'Перегенерировал ключ', 0, getIp(req), getUserAgent(req));
+  res.json({ success: true, key });
 });
 
 /* ---------- Load Types CRUD ---------- */

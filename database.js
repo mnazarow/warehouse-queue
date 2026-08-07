@@ -66,6 +66,18 @@ function initDatabase() {
     );
   `);
 
+  // Схема проезда: описание и картинка-схема хранятся у склада.
+  const whCols = db.prepare("PRAGMA table_info('warehouses')").all();
+  if (!whCols.some(c => c.name === 'directions')) {
+    db.exec("ALTER TABLE warehouses ADD COLUMN directions TEXT DEFAULT ''");
+  }
+  if (!whCols.some(c => c.name === 'map_scheme')) {
+    db.exec("ALTER TABLE warehouses ADD COLUMN map_scheme TEXT DEFAULT ''");
+  }
+  if (!whCols.some(c => c.name === 'route_moscow')) {
+    db.exec("ALTER TABLE warehouses ADD COLUMN route_moscow TEXT DEFAULT ''");
+  }
+
   const colCheck = db.prepare("PRAGMA table_info('slots')").all();
   if (!colCheck.some(c => c.name === 'customer_account')) {
     db.exec("ALTER TABLE slots ADD COLUMN customer_account TEXT");
@@ -323,6 +335,15 @@ function initDatabase() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Журнал бронирований для статистики. Строка на каждую успешную запись.
+    -- В отличие от slots.booked_at, событие не пропадает при отмене брони
+    -- или пересоздании слотов — история графика «Бронирования» сохраняется.
+    CREATE TABLE IF NOT EXISTS booking_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slot_id INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS user_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_type TEXT NOT NULL DEFAULT '',
@@ -414,6 +435,15 @@ function initDatabase() {
     db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name, is_admin) VALUES (?, ?, ?, ?, 1)').run('admin', hash, 'Главный', 'Администратор');
     console.log('Default manager created: admin / admin123');
   }
+
+  // Разовый перенос истории бронирований в booking_events: пока журнал пуст,
+  // затягиваем все текущие slots.booked_at, чтобы график не начинался с нуля.
+  try {
+    const evCount = db.prepare('SELECT COUNT(*) AS cnt FROM booking_events').get();
+    if (evCount.cnt === 0) {
+      db.exec("INSERT INTO booking_events (slot_id, created_at) SELECT id, booked_at FROM slots WHERE booked_at IS NOT NULL AND booked_at != ''");
+    }
+  } catch (e) {}
 
   return db;
 }

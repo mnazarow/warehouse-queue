@@ -192,3 +192,146 @@ h1 { font-size: 1.75rem; margin-bottom: 8px; }
 .mb-list .k { flex: 0 0 42%; color: #718096; }
 .mb-list .v { flex: 1; color: #1a202c; font-weight: 600; white-space: pre-wrap; word-break: break-word; }
 .mb-status { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.85rem; background: #ebf8ff; color: #2c5282; }
+
+/* ==========================================================================
+   Тема Hi-Tech (переключатель на страницах записи, класс на <body>).
+   Тёмный фон с неоновой сеткой, стеклянные панели, свечение циан/фиолет.
+   Инлайновые светлые фоны элементов перекрываются через !important.
+   ========================================================================== */
+#themeToggle {
+  position: fixed; top: 12px; right: 12px; z-index: 10004;
+  padding: 8px 14px; border-radius: 999px; border: 1px solid #cbd5e0;
+  background: #fff; color: #2d3748; font-size: 0.82rem; font-weight: 600;
+  cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.12); transition: all 0.2s;
+}
+#themeToggle:hover { transform: translateY(-1px); }
+
+body.theme-hitech {
+  color: #d7e3ff;
+  background:
+    radial-gradient(1100px 500px at 15% -10%, rgba(0,229,255,0.14), transparent 60%),
+    radial-gradient(900px 500px at 110% 15%, rgba(155,81,224,0.16), transparent 60%),
+    repeating-linear-gradient(0deg, rgba(0,229,255,0.045) 0 1px, transparent 1px 44px),
+    repeating-linear-gradient(90deg, rgba(0,229,255,0.045) 0 1px, transparent 1px 44px),
+    #060a14;
+  background-attachment: fixed;
+}
+body.theme-hitech #themeToggle {
+  background: rgba(10,16,30,0.9); color: #7df9ff; border-color: rgba(0,229,255,0.5);
+  box-shadow: 0 0 14px rgba(0,229,255,0.35);
+}
+body.theme-hitech .container {
+  background: rgba(10,15,28,0.72);
+  border: 1px solid rgba(0,229,255,0.22);
+  border-radius: 18px;
+  margin-top: 22px; margin-bottom: 22px;
+  box-shadow: 0 0 42px rgba(0,229,255,0.10), inset 0 0 60px rgba(0,229,255,0.03);
+  backdrop-filter: blur(8px);
+}
+body.theme-hitech h1 {
+  background: linear-gradient(90deg, #38e8ff, #7aa7ff 55%, #b06bff);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+body.theme-hitech .subtitle { color: #8ea6cf; }
+body.theme-hitech .tab {
+  background: #0c1426; color: #8ea6cf; border: 1px solid #1b2a4a;
+}
+body.theme-hitech .tab.active {
+  background: linear-gradient(120deg, #0aa9c2, #4c6fff);
+  color: #fff; border-color: transparent;
+  box-shadow: 0 0 18px rgba(0,229,255,0.45);
+}
+body.theme-hitech .date-input label,
+body.theme-hitech .form-group label { color: #b9cdf2; }
+body.theme-hitech input,
+body.theme-hitech select,
+body.theme-hitech textarea {
+  background: #0b1222 !important; color: #d7e3ff !important;
+  border-color: #223558 !important; color-scheme: dark;
+}
+body.theme-hitech input:focus,
+body.theme-hitech select:focus,
+body.theme-hitech textarea:focus {
+  outline: none; border-color: #38e8ff !important;
+  box-shadow: 0 0 10px rgba(0,229,255,0.35);
+}
+body.theme-hitech .wh-card {
+  background: #0c1426; border-color: #223558; color: #b9cdf2;
+}
+body.theme-hitech .wh-card.active {
+  background: rgba(0,229,255,0.10); border-color: #38e8ff; color: #7df9ff;
+  box-shadow: 0 0 16px rgba(0,229,255,0.35);
+}
+body.theme-hitech .slot {
+  background: #0c1426; border-color: #1b2a4a; color: #d7e3ff;
+}
+body.theme-hitech .slot .time { font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace; }
+body.theme-hitech .slot .label { color: #8ea6cf; }
+body.theme-hitech .slot:hover:not(.booked) {
+  border-color: #38e8ff; box-shadow: 0 0 16px rgba(0,229,255,0.4);
+  transform: translateY(-1px);
+}
+body.theme-hitech .slot.booked { background: #0a0f1d; color: #4a5b7d; border-color: #14203a; }
+body.theme-hitech .slot.booked .label { color: #44557a; }
+body.theme-hitech .slot.confirmed { background: rgba(56,232,255,0.06); color: #4bd6a4; border-color: #1f5c49; }
+body.theme-hitech .slot.mine { background: rgba(72,255,167,0.08); border-color: #2fd58b; color: #6dfab4; box-shadow: 0 0 12px rgba(47,213,139,0.3); }
+body.theme-hitech .slot.mine .label { color: #6dfab4; }
+body.theme-hitech .slot.past { background: rgba(255,71,111,0.06); color: #ff5f7e; border-color: #55182b; }
+body.theme-hitech .slot.in-progress { background: rgba(155,81,224,0.10); color: #c39bff; border-color: #4b2f77; }
+body.theme-hitech .slot.assembling { background: rgba(255,196,0,0.07); color: #ffd257; border-color: #5c4a12; }
+body.theme-hitech .slot.completed { background: rgba(72,255,167,0.05); color: #55c98f; border-color: #1f5c49; }
+body.theme-hitech .no-slots { color: #8ea6cf; }
+body.theme-hitech .modal {
+  background: #0b1120; border: 1px solid rgba(0,229,255,0.25);
+  box-shadow: 0 0 44px rgba(0,229,255,0.16);
+  color: #d7e3ff;
+}
+body.theme-hitech .modal h2 { color: #eaf3ff; }
+body.theme-hitech .modal .info { background: #0c1426 !important; border: 1px solid #223558 !important; color: #b9cdf2 !important; }
+body.theme-hitech .modal-overlay { background: rgba(2,6,14,0.78); }
+body.theme-hitech .btn-primary {
+  background: linear-gradient(120deg, #0aa9c2, #4c6fff);
+  box-shadow: 0 0 14px rgba(0,229,255,0.35); border: none;
+}
+body.theme-hitech .btn-primary:hover { box-shadow: 0 0 22px rgba(0,229,255,0.55); }
+body.theme-hitech .btn-secondary { background: #16223c; color: #b9cdf2; border: 1px solid #223558; }
+body.theme-hitech .btn-danger { box-shadow: 0 0 12px rgba(255,71,111,0.35); }
+body.theme-hitech a { color: #57d7ff; }
+body.theme-hitech .success-msg { background: rgba(72,255,167,0.06); border-color: #2fd58b; }
+body.theme-hitech .success-msg h2 { color: #6dfab4; }
+body.theme-hitech .success-msg p { color: #b9cdf2; }
+/* Инлайновые светлые блоки на страницах записи */
+body.theme-hitech #bookingMessageBanner { background: rgba(0,229,255,0.07) !important; border-color: rgba(0,229,255,0.35) !important; color: #9fd8ff !important; }
+body.theme-hitech #validationErrorBlock,
+body.theme-hitech #submitError { background: rgba(255,71,111,0.08) !important; border-color: #ff5f7e !important; }
+body.theme-hitech #validationErrorBlock div { color: #ff8ba1 !important; }
+body.theme-hitech #forceHint { background: rgba(255,196,0,0.07) !important; border-color: #b8901d !important; color: #ffd257 !important; }
+body.theme-hitech #loadingModal .spinner { border-color: #223558; border-top-color: #38e8ff; }
+body.theme-hitech #loadingModal .lm-title { color: #eaf3ff; }
+body.theme-hitech #loadingModal .lm-hint { color: #8ea6cf; }
+body.theme-hitech .mb-list .k { color: #8ea6cf; }
+body.theme-hitech .mb-list .v { color: #eaf3ff; }
+body.theme-hitech .mb-list li { border-bottom-color: #1b2a4a; }
+body.theme-hitech #warehouseConfirmModal .modal > div[style*="fff5f5"] { background: rgba(255,71,111,0.08) !important; border-color: #ff5f7e !important; }
+body.theme-hitech #bookingModal .modal > .info[style*="fff5f5"] { background: rgba(255,71,111,0.08) !important; border-color: #ff5f7e !important; }
+/* Мастер трёх шагов */
+body.theme-hitech .wizard { background: rgba(10,15,28,0.6); border-color: rgba(0,229,255,0.22); }
+body.theme-hitech .wizard-summary { background: #0c1426; border-color: #223558; color: #b9cdf2; }
+body.theme-hitech .wizard-summary b { color: #eaf3ff; }
+body.theme-hitech .stepper .st { color: #5f7396; }
+body.theme-hitech .stepper .st .num { background: #0c1426; border-color: #223558; color: #5f7396; }
+body.theme-hitech .stepper .st.active { color: #eaf3ff; }
+body.theme-hitech .stepper .st.active .num { background: linear-gradient(120deg, #0aa9c2, #4c6fff); border-color: transparent; color: #fff; box-shadow: 0 0 14px rgba(0,229,255,0.5); }
+body.theme-hitech .stepper .st.done .num { background: rgba(72,255,167,0.12); border-color: #2fd58b; color: #6dfab4; }
+body.theme-hitech .step h3 { color: #eaf3ff; }
+body.theme-hitech .step .step-hint { color: #8ea6cf; }
+body.theme-hitech .review-list { color: #8ea6cf; }
+body.theme-hitech .review-list li { border-bottom-color: #1b2a4a; }
+body.theme-hitech .review-list span { color: #eaf3ff; }
+body.theme-hitech .field-error { color: #ff8ba1; }
+body.theme-hitech .form-group div[style*="f7fafc"] { background: #0c1426 !important; border-color: #223558 !important; }
+/* Блок «Как доехать» в окне успеха */
+body.theme-hitech #successDirections > div { background: #0c1426 !important; border-color: #223558 !important; }
+body.theme-hitech #successDirections div { color: #b9cdf2 !important; }
+body.theme-hitech #successDirections img { border-color: #223558 !important; }
