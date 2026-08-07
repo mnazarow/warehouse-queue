@@ -57,6 +57,24 @@ function bookingMaxDays() {
   const envN = parseInt(process.env.BOOKING_MAX_DAYS, 10);
   return (Number.isFinite(envN) && envN > 0) ? envN : 14;
 }
+// За сколько минут до начала окна ещё можно записаться
+// (настройка booking_min_minutes → env BOOKING_MIN_MINUTES → 45).
+function bookingMinMinutes() {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'booking_min_minutes'").get();
+    if (row && row.value !== '' && row.value !== null) {
+      const n = parseInt(row.value, 10);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+  } catch (e) {}
+  const envN = parseInt(process.env.BOOKING_MIN_MINUTES, 10);
+  return (Number.isFinite(envN) && envN >= 0) ? envN : 45;
+}
+
+function bookingMinMs() {
+  return bookingMinMinutes() * 60000;
+}
+
 // Behind a reverse proxy (nginx) trust X-Forwarded-* so req.ip is the real
 // client address (used by the allowed-IP checks). Configurable via TRUST_PROXY.
 if (process.env.TRUST_PROXY) {
@@ -235,7 +253,7 @@ function redisDel(key) {
 var TTL_CATEGORIES = [
   { key: 'slots_public',    label: 'Свободные слоты (страница записи)',        def: 30  },
   { key: 'slots_cabinet',   label: 'Слоты в кабинете менеджера',               def: 10  },
-  { key: 'directories',     label: 'Справочники (склады, номенклатура, контрагенты, кладовщики, менеджеры, классы машин, виды загрузки, подсети, баны)', def: 300 },
+  { key: 'directories',     label: 'Справочники (склады, номенклатура, контрагенты, кладовщики, менеджеры, классы машин, виды загрузки, логисты, подсети, баны)', def: 300 },
   { key: 'c1_data',         label: 'Данные 1С (заказы, менеджеры, инженеры, логи)', def: 60 },
   { key: 'messages',        label: 'Сообщения',                                def: 30  },
   { key: 'stats',           label: 'Статистика',                               def: 30  },
@@ -429,6 +447,30 @@ setInterval(() => {
   for (const [ip, arr] of bookAttempts) {
     const fresh = arr.filter(t => now - t < BOOK_WINDOW_MS);
     if (fresh.length) bookAttempts.set(ip, fresh); else bookAttempts.delete(ip);
+  }
+}, 5 * 60 * 1000).unref();
+
+// Лимитер для просмотра/отмены своей записи: доступ подтверждается номером
+// телефона, поэтому перебор номеров по чужому слоту должен быть невозможен.
+const lookupAttempts = new Map();
+const LOOKUP_WINDOW_MS = 10 * 60 * 1000;
+const LOOKUP_MAX_ATTEMPTS = 15;
+function lookupRateLimit(req, res, next) {
+  const ip = getIp(req) || 'unknown';
+  const now = Date.now();
+  const recent = (lookupAttempts.get(ip) || []).filter(t => now - t < LOOKUP_WINDOW_MS);
+  if (recent.length >= LOOKUP_MAX_ATTEMPTS) {
+    return res.status(429).json({ error: 'Слишком много попыток. Попробуйте позже.' });
+  }
+  recent.push(now);
+  lookupAttempts.set(ip, recent);
+  next();
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, arr] of lookupAttempts) {
+    const fresh = arr.filter(t => now - t < LOOKUP_WINDOW_MS);
+    if (fresh.length) lookupAttempts.set(ip, fresh); else lookupAttempts.delete(ip);
   }
 }, 5 * 60 * 1000).unref();
 
@@ -844,7 +886,7 @@ app.get('/api/slots', async (req, res) => {
   }
   // "past" depends on the current time, so it is always computed fresh,
   // never served from cache.
-  const minMs = Date.now() + 3600000;
+  const minMs = Date.now() + bookingMinMs();
   const maxMs = Date.now() + bookingMaxDays() * 86400000;
   const enriched = slots.map(s => {
     const inst = slotInstantMs(s.date, s.time_start);
@@ -971,8 +1013,8 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
     }
   }
   const slotMs = slotInstantMs(slot.date, slot.time_start);
-  if (slotMs <= Date.now() + 3600000) {
-    return res.status(400).json({ error: 'Слот можно забронировать минимум за 1 час' });
+  if (slotMs <= Date.now() + bookingMinMs()) {
+    return res.status(400).json({ error: 'Слот можно забронировать минимум за ' + bookingMinMinutes() + ' мин. до начала' });
   }
   if (slotMs > Date.now() + bookingMaxDays() * 86400000) {
     return res.status(400).json({ error: 'Нельзя записаться на дату дальше ' + bookingMaxDays() + ' дн. от текущей' });
@@ -1075,6 +1117,102 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
     console.error('Booking error:', err);
     res.status(500).json({ error: 'Внутренняя ошибка сервера. Попробуйте позже.' });
   }
+});
+
+/* ---------- Своя запись: просмотр и отмена клиентом ---------- */
+
+// Доступ подтверждается номером телефона, указанным при записи.
+// Сравниваем только цифры: в базе номер мог быть сохранён в любом формате.
+function samePhone(a, b) {
+  const da = String(a || '').replace(/\D/g, '');
+  const dbg = String(b || '').replace(/\D/g, '');
+  if (!da || !dbg) return false;
+  const norm = (d) => (d.length === 11 && (d[0] === '8' || d[0] === '7')) ? '7' + d.slice(1) : d;
+  return norm(da) === norm(dbg);
+}
+
+function slotStatusLabel(slot) {
+  if (slot.completed) return 'Выполнено';
+  if (slot.assembling) return 'На сборке';
+  if (slot.in_progress) return 'У кладовщика';
+  if (slot.confirmed) return 'Подтверждён';
+  return 'Ожидает подтверждения';
+}
+
+// Запись нельзя отменить, если склад уже начал с ней работать
+// или окно уже началось.
+function cancelBlockReason(slot) {
+  if (slot.completed) return 'Заказ уже выполнен — отмена невозможна.';
+  if (slot.assembling) return 'Заказ уже на сборке — отмена невозможна, свяжитесь со складом.';
+  if (slot.in_progress) return 'Заказ уже у кладовщика — отмена невозможна, свяжитесь со складом.';
+  const slotMs = slotInstantMs(slot.date, slot.time_start);
+  if (Number.isFinite(slotMs) && slotMs <= Date.now()) return 'Время визита уже наступило — отмена невозможна.';
+  return '';
+}
+
+function publicBookingView(slot) {
+  return {
+    id: slot.id,
+    date: slot.date,
+    type: slot.type,
+    typeLabel: slot.type === 'small' ? 'До 3-х товаров в накладной' : 'Сборный заказ',
+    time_start: slot.time_start,
+    time_end: slot.time_end,
+    warehouse_name: slot.warehouse_name || '',
+    warehouse_address: slot.warehouse_address || '',
+    customer_name: slot.customer_name || '',
+    customer_phone: slot.customer_phone || '',
+    customer_organization: slot.customer_organization || '',
+    customer_account: slot.customer_account || '',
+    customer_comment: slot.customer_comment || '',
+    vehicle_class_name: slot.vehicle_class_name || '',
+    load_type_name: slot.load_type_name || '',
+    booked_at: slot.booked_at || '',
+    status: slotStatusLabel(slot),
+    canCancel: !cancelBlockReason(slot),
+    cancelBlockReason: cancelBlockReason(slot)
+  };
+}
+
+function findOwnSlot(id, phone) {
+  const slot = db.prepare(`
+    SELECT s.*, w.name AS warehouse_name, w.address AS warehouse_address,
+           vc.name AS vehicle_class_name, lt.name AS load_type_name
+    FROM slots s
+    LEFT JOIN warehouses w ON w.id = s.warehouse_id
+    LEFT JOIN vehicle_classes vc ON vc.id = s.vehicle_class_id
+    LEFT JOIN load_types lt ON lt.id = s.load_type_id
+    WHERE s.id = ?
+  `).get(id);
+  if (!slot || !slot.is_booked) return { error: 'Запись не найдена — возможно, она уже отменена.', code: 404 };
+  if (!samePhone(slot.customer_phone, phone)) {
+    return { error: 'Номер телефона не совпадает с указанным при записи.', code: 403 };
+  }
+  return { slot };
+}
+
+app.post('/api/slots/:id/my-booking', lookupRateLimit, (req, res) => {
+  const found = findOwnSlot(req.params.id, req.body && req.body.phone);
+  if (found.error) return res.status(found.code).json({ error: found.error });
+  res.json({ success: true, booking: publicBookingView(found.slot) });
+});
+
+app.post('/api/slots/:id/my-booking/cancel', lookupRateLimit, (req, res) => {
+  const found = findOwnSlot(req.params.id, req.body && req.body.phone);
+  if (found.error) return res.status(found.code).json({ error: found.error });
+  const slot = found.slot;
+  const blocked = cancelBlockReason(slot);
+  if (blocked) return res.status(409).json({ error: blocked });
+  const info = db.prepare(
+    "UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ? AND is_booked = 1"
+  ).run(slot.id);
+  if (!info || info.changes === 0) {
+    return res.status(409).json({ error: 'Запись уже изменена. Обновите страницу.' });
+  }
+  logAction('client', (slot.customer_name || '') + ' (' + (slot.customer_phone || '') + ')', 'Отмена записи клиентом',
+    'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date, Number(slot.id), getIp(req), getUserAgent(req));
+  redisFlushSlotsCache();
+  res.json({ success: true });
 });
 
 app.post('/api/manager/login', (req, res) => {
@@ -1386,6 +1524,20 @@ app.post('/api/manager/settings/booking-days', requireManager, (req, res) => {
     return res.status(400).json({ error: 'Недопустимое число дней (от 1 до 365)' });
   }
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('booking_max_days', ?)").run(String(n));
+  res.json({ success: true });
+});
+
+app.get('/api/manager/settings/booking-min-minutes', requireManager, (req, res) => {
+  res.json({ minutes: bookingMinMinutes() });
+});
+
+app.post('/api/manager/settings/booking-min-minutes', requireManager, (req, res) => {
+  const n = parseInt(req.body.minutes, 10);
+  if (!Number.isFinite(n) || n < 0 || n > 1440) {
+    return res.status(400).json({ error: 'Недопустимое число минут (от 0 до 1440)' });
+  }
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('booking_min_minutes', ?)").run(String(n));
+  redisFlushSlotsCache();
   res.json({ success: true });
 });
 
@@ -3420,6 +3572,94 @@ app.delete('/api/manager/vehicle-classes/:id', requireManager, (req, res) => {
   }
   db.prepare('DELETE FROM vehicle_classes WHERE id = ?').run(id);
   redisFlushByPrefix('vehicle-classes');
+  res.json({ success: true });
+});
+
+/* ---------- Логисты (справочник) ---------- */
+
+// Телефон логиста приводится к 11 цифрам с 7 в начале; пустой допустим.
+// Возвращает { phone } либо { error }.
+function normalizeLogisticianPhone(raw) {
+  const input = String(raw == null ? '' : raw).trim();
+  if (!input) return { phone: '' };
+  let d = input.replace(/\D/g, '');
+  if (d.length === 11 && d[0] === '8') d = '7' + d.slice(1);
+  else if (d.length === 10) d = '7' + d;
+  if (d.length !== 11 || d[0] !== '7') {
+    return { error: 'Телефон должен быть российским номером из 11 цифр, например +7 999 123-45-67' };
+  }
+  return { phone: d };
+}
+
+app.get('/api/manager/logisticians', requireManager, async (req, res) => {
+  const cacheKey = 'logisticians';
+  const cached = await redisGet(cacheKey);
+  if (cached) return res.json(JSON.parse(cached));
+  const list = db.prepare('SELECT id, name, phone, created_at FROM logisticians ORDER BY name').all();
+  const response = { logisticians: list };
+  redisSet(cacheKey, JSON.stringify(response), 300);
+  res.json(response);
+});
+
+app.post('/api/manager/logisticians', requireManager, (req, res) => {
+  const name = String((req.body && req.body.name) || '').trim();
+  if (!name) {
+    return res.status(400).json({ error: 'Укажите ФИО' });
+  }
+  const parsed = normalizeLogisticianPhone(req.body && req.body.phone);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const existing = db.prepare('SELECT id FROM logisticians WHERE name = ?').get(name);
+  if (existing) {
+    return res.status(409).json({ error: 'Логист с таким ФИО уже есть' });
+  }
+  if (parsed.phone) {
+    const dupPhone = db.prepare('SELECT name FROM logisticians WHERE phone = ?').get(parsed.phone);
+    if (dupPhone) {
+      return res.status(409).json({ error: 'Этот номер уже указан у логиста ' + dupPhone.name });
+    }
+  }
+  db.prepare('INSERT INTO logisticians (name, phone) VALUES (?, ?)').run(name, parsed.phone);
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Логисты', 'Добавил: ' + name, 0, getIp(req), getUserAgent(req));
+  redisFlushByPrefix('logisticians');
+  res.json({ success: true });
+});
+
+app.put('/api/manager/logisticians/:id', requireManager, (req, res) => {
+  const { id } = req.params;
+  const existing = db.prepare('SELECT * FROM logisticians WHERE id = ?').get(id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Логист не найден' });
+  }
+  const name = req.body && req.body.name !== undefined ? String(req.body.name).trim() : existing.name;
+  if (!name) {
+    return res.status(400).json({ error: 'Укажите ФИО' });
+  }
+  const parsed = req.body && req.body.phone !== undefined
+    ? normalizeLogisticianPhone(req.body.phone)
+    : { phone: existing.phone };
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  if (name !== existing.name) {
+    const dup = db.prepare('SELECT id FROM logisticians WHERE name = ? AND id != ?').get(name, id);
+    if (dup) return res.status(409).json({ error: 'Логист с таким ФИО уже есть' });
+  }
+  if (parsed.phone && parsed.phone !== existing.phone) {
+    const dupPhone = db.prepare('SELECT name FROM logisticians WHERE phone = ? AND id != ?').get(parsed.phone, id);
+    if (dupPhone) return res.status(409).json({ error: 'Этот номер уже указан у логиста ' + dupPhone.name });
+  }
+  db.prepare('UPDATE logisticians SET name = ?, phone = ? WHERE id = ?').run(name, parsed.phone, id);
+  logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Логисты', 'Изменил: ' + name, 0, getIp(req), getUserAgent(req));
+  redisFlushByPrefix('logisticians');
+  res.json({ success: true });
+});
+
+app.delete('/api/manager/logisticians/:id', requireManager, (req, res) => {
+  const { id } = req.params;
+  const item = db.prepare('SELECT * FROM logisticians WHERE id = ?').get(id);
+  if (item) {
+    logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Логисты', 'Удалил: ' + item.name, 0, getIp(req), getUserAgent(req));
+  }
+  db.prepare('DELETE FROM logisticians WHERE id = ?').run(id);
+  redisFlushByPrefix('logisticians');
   res.json({ success: true });
 });
 

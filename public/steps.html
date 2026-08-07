@@ -97,12 +97,12 @@
 
     <div id="pickerBlock">
       <div class="tabs">
-        <button class="tab active" data-type="small">До 3-х товаров в накладной (15 мин)</button>
-        <button class="tab" data-type="bulk">Сборный заказ (30 мин)</button>
+        <button class="tab active" data-type="small">До 3-х товаров в накладной (15 мин), кроме крупногабаритного товара</button>
+        <button class="tab" data-type="bulk">Сборный заказ (30 мин), включая крупногабаритный товар</button>
       </div>
 
       <div class="date-input">
-        <label for="datePicker">Дата:</label>
+        <label for="datePicker">Выберите дату:</label>
         <input type="date" id="datePicker">
       </div>
 
@@ -207,7 +207,7 @@
         </div>
 
         <div class="form-group" id="fgCaptcha">
-          <label>Капча: <strong id="captchaExpression">…</strong> <span class="req">*</span></label>
+          <label for="captchaAnswer">Проверяем, что вы не робот, впишите сумму чисел: <strong id="captchaExpression">…</strong> <span class="req">*</span></label>
           <div style="display:flex;gap:8px;align-items:center">
             <input type="number" id="captchaAnswer" placeholder="?" autocomplete="off">
             <button class="btn btn-secondary btn-sm" type="button" onclick="loadCaptcha()" style="white-space:nowrap">Обновить</button>
@@ -285,6 +285,7 @@
     </div>
   </div>
 
+  <script src="/my-booking.js"></script>
   <script>
     const SLOT_NAMES = { small: 'До 3-х товаров в накладной', bulk: 'Сборный заказ' };
     const MAX_ACCOUNTS_SMALL = 3;
@@ -382,6 +383,8 @@
 
     // Сетка строится через DOM API: никаких onclick-строк с данными сервера.
     function renderSlots(slots) {
+      // Записи, сделанные в этом браузере, подсвечиваются как «Ваша запись».
+      const mine = MyBooking.mineIds();
       const grid = document.createElement('div');
       grid.className = 'slots-grid';
       for (const slot of slots) {
@@ -396,6 +399,9 @@
         else if (slot.is_booked) { cssClass = 'booked'; labelText = 'Занято'; }
         else { free = true; }
 
+        const isMine = slot.is_booked && mine.has(Number(slot.id));
+        if (isMine) { cssClass += ' mine'; labelText = 'Ваша запись'; }
+
         const el = document.createElement('div');
         el.className = 'slot' + (cssClass ? ' ' + cssClass : '');
         el.dataset.id = slot.id;
@@ -409,6 +415,9 @@
         el.appendChild(label);
         if (free) {
           el.addEventListener('click', () => startWizard(slot));
+        } else if (slot.is_booked) {
+          // Занятое окно открывается владельцем после проверки телефона.
+          el.addEventListener('click', () => MyBooking.open(slot.id));
         }
         grid.appendChild(el);
       }
@@ -786,6 +795,9 @@
           return;
         }
 
+        // Запоминаем бронь в этом браузере: слот пометится как «Ваша запись»,
+        // и открыть её можно будет без ввода телефона.
+        MyBooking.remember(selected.id, body.phone, selected.date);
         // Заявка создана: предупреждение показываем как информацию.
         if (data.warning) {
           alert('Заявка принята, но обратите внимание:\n\n' + data.warning);
@@ -859,6 +871,7 @@
       this.value = m;
     });
 
+    MyBooking.init({ onChange: function () { if (!selected) loadSlots(); } });
     initDate();
     loadWarehouses();
     loadAllowNoAccount();

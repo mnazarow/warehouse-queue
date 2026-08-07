@@ -313,6 +313,16 @@ function initDatabase() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Справочник логистов: ФИО и телефон.
+    -- Телефон хранится цифрами (11 знаков, с 7 в начале) — так его удобно
+    -- сравнивать и передавать в SMS-шлюз.
+    CREATE TABLE IF NOT EXISTS logisticians (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      phone TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS user_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_type TEXT NOT NULL DEFAULT '',

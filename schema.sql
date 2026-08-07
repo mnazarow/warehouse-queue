@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS storekeepers (
 CREATE TABLE IF NOT EXISTS vehicle_classes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS load_types      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS categories      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
+-- Справочник логистов: ФИО и телефон (хранится цифрами, 11 знаков, с 7 в начале).
+CREATE TABLE IF NOT EXISTS logisticians    (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT DEFAULT '', created_at TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS counterparties  (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT DEFAULT '', inn TEXT DEFAULT '', kpp TEXT DEFAULT '', comment TEXT DEFAULT '');
 
 -- IP-allowlist для кабинета/кладовщика (пустой список = доступ открыт).
