@@ -400,11 +400,46 @@ function ensureManagerAdminColumn() {
   } catch (e) { console.error('ensureManagerAdminColumn:', e.message); }
 }
 
+// Новые таблицы и колонки последних версий — в АКТИВНОЙ СУБД. Покрывает
+// PostgreSQL, куда данные мигрировали до появления этих объектов в схеме
+// (initDatabase() создаёт их только в SQLite): logisticians, booking_events,
+// колонки складов directions / map_scheme / route_moscow.
+function ensureFeatureSchema() {
+  try {
+    if (dbAdapter.getType() === 'postgresql') {
+      db.exec("CREATE TABLE IF NOT EXISTS logisticians (id SERIAL PRIMARY KEY, name TEXT NOT NULL, phone TEXT DEFAULT '', created_at TEXT DEFAULT '')");
+      db.exec("CREATE TABLE IF NOT EXISTS booking_events (id SERIAL PRIMARY KEY, slot_id INTEGER DEFAULT 0, created_at TEXT DEFAULT '')");
+      ['directions', 'map_scheme', 'route_moscow'].forEach(function(c) {
+        try { db.exec("ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS " + c + " TEXT DEFAULT ''"); } catch (e) {}
+      });
+    } else {
+      // SQLite: обычно уже создано в initDatabase(); повтор безопасен и
+      // страхует базы, открытые в обход initDatabase.
+      db.exec("CREATE TABLE IF NOT EXISTS logisticians (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')))");
+      db.exec("CREATE TABLE IF NOT EXISTS booking_events (id INTEGER PRIMARY KEY AUTOINCREMENT, slot_id INTEGER DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')))");
+      try {
+        const wcols = sqliteDb.prepare("PRAGMA table_info('warehouses')").all().map(function(c) { return c.name; });
+        ['directions', 'map_scheme', 'route_moscow'].forEach(function(c) {
+          if (wcols.indexOf(c) === -1) sqliteDb.exec("ALTER TABLE warehouses ADD COLUMN " + c + " TEXT DEFAULT ''");
+        });
+      } catch (e) {}
+    }
+    // Разовый перенос истории бронирований в журнал статистики.
+    try {
+      const cnt = db.prepare('SELECT COUNT(*) AS cnt FROM booking_events').get();
+      if (cnt && Number(cnt.cnt) === 0) {
+        db.exec("INSERT INTO booking_events (slot_id, created_at) SELECT id, booked_at FROM slots WHERE booked_at IS NOT NULL AND booked_at != ''");
+      }
+    } catch (e) {}
+  } catch (e) { console.error('ensureFeatureSchema:', e.message); }
+}
+
 loadTtlOverrides();
 initRedis();
 scheduleAutobackup();
 ensurePageVisitsTable();
 ensureManagerAdminColumn();
+ensureFeatureSchema();
 // Главный администратор (admin) всегда имеет признак администратора.
 try { db.prepare("UPDATE managers SET is_admin = 1 WHERE username = 'admin'").run(); } catch (e) {}
 
@@ -638,6 +673,21 @@ function managerSmsSuffix(account) {
   if (!contacts.length) return '';
   const list = contacts.map(c => (c.name ? c.name + ' ' : '') + '+' + c.phone).join(', ');
   return '. Менеджер' + (contacts.length > 1 ? 'ы' : '') + ' заказа: ' + list;
+}
+
+// Контакт логиста для SMS о записи: первый по алфавиту логист из справочника,
+// предпочтительно с заполненным телефоном. Пусто, если справочник пуст.
+// ФИО сокращается до «Фамилия И.О.» — кириллическая SMS тарифицируется
+// по 70 символов на сегмент.
+function logisticianSmsSuffix() {
+  try {
+    const withPhone = db.prepare("SELECT name, phone FROM logisticians WHERE phone IS NOT NULL AND phone <> '' ORDER BY name LIMIT 1").get();
+    const any = withPhone || db.prepare('SELECT name, phone FROM logisticians ORDER BY name LIMIT 1').get();
+    if (!any || !any.name) return '';
+    const name = managerDisplayName(any.name) || any.name;
+    const phone = any.phone ? ' +' + any.phone : '';
+    return '. Логист: ' + name + phone;
+  } catch (e) { return ''; }
 }
 
 function validateAccountsWith1C(accounts, validationUrl, username, password) {
@@ -1129,7 +1179,9 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   // Телефон менеджера заказа добавляется, только если он корректно распознан
   // в данных 1С по указанным клиентом счетам.
   const managerSuffix = managerSmsSuffix(account);
-  sendSms(phone, `Вы записаны на ${slot.date} (${dayName}) ${slot.time_start}–${slot.time_end}, ${typeLabel}, склад ${whName}${whAddr}${managerSuffix}`);
+  // Контакт логиста добавляется, если в справочнике заполнен хотя бы один.
+  const logistSuffix = logisticianSmsSuffix();
+  sendSms(phone, `Вы записаны на ${slot.date} (${dayName}) ${slot.time_start}–${slot.time_end}, ${typeLabel}, склад ${whName}${whAddr}${managerSuffix}${logistSuffix}`);
   redisFlushSlotsCache();
   res.json({ success: true, warning: bookingWarning || undefined });
   } catch (err) {
@@ -1177,6 +1229,7 @@ function publicBookingView(slot) {
     typeLabel: slot.type === 'small' ? 'До 3-х товаров в накладной' : 'Сборный заказ',
     time_start: slot.time_start,
     time_end: slot.time_end,
+    warehouse_id: slot.warehouse_id || null,
     warehouse_name: slot.warehouse_name || '',
     warehouse_address: slot.warehouse_address || '',
     customer_name: slot.customer_name || '',
@@ -3640,16 +3693,22 @@ function normalizeLogisticianPhone(raw) {
 }
 
 app.get('/api/manager/logisticians', requireManager, async (req, res) => {
-  const cacheKey = 'logisticians';
-  const cached = await redisGet(cacheKey);
-  if (cached) return res.json(JSON.parse(cached));
-  const list = db.prepare('SELECT id, name, phone, created_at FROM logisticians ORDER BY name').all();
-  const response = { logisticians: list };
-  redisSet(cacheKey, JSON.stringify(response), 300);
-  res.json(response);
+  try {
+    const cacheKey = 'logisticians';
+    const cached = await redisGet(cacheKey);
+    if (cached) return res.json(JSON.parse(cached));
+    const list = db.prepare('SELECT id, name, phone, created_at FROM logisticians ORDER BY name').all();
+    const response = { logisticians: list };
+    redisSet(cacheKey, JSON.stringify(response), 300);
+    res.json(response);
+  } catch (err) {
+    console.error('Logisticians list error:', err);
+    res.status(500).json({ error: 'Ошибка базы данных: ' + err.message });
+  }
 });
 
 app.post('/api/manager/logisticians', requireManager, (req, res) => {
+  try {
   const name = String((req.body && req.body.name) || '').trim();
   if (!name) {
     return res.status(400).json({ error: 'Укажите ФИО' });
@@ -3670,9 +3729,14 @@ app.post('/api/manager/logisticians', requireManager, (req, res) => {
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Логисты', 'Добавил: ' + name, 0, getIp(req), getUserAgent(req));
   redisFlushByPrefix('logisticians');
   res.json({ success: true });
+  } catch (err) {
+    console.error('Logistician create error:', err);
+    res.status(500).json({ error: 'Ошибка базы данных: ' + err.message });
+  }
 });
 
 app.put('/api/manager/logisticians/:id', requireManager, (req, res) => {
+  try {
   const { id } = req.params;
   const existing = db.prepare('SELECT * FROM logisticians WHERE id = ?').get(id);
   if (!existing) {
@@ -3698,17 +3762,26 @@ app.put('/api/manager/logisticians/:id', requireManager, (req, res) => {
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Логисты', 'Изменил: ' + name, 0, getIp(req), getUserAgent(req));
   redisFlushByPrefix('logisticians');
   res.json({ success: true });
+  } catch (err) {
+    console.error('Logistician update error:', err);
+    res.status(500).json({ error: 'Ошибка базы данных: ' + err.message });
+  }
 });
 
 app.delete('/api/manager/logisticians/:id', requireManager, (req, res) => {
-  const { id } = req.params;
-  const item = db.prepare('SELECT * FROM logisticians WHERE id = ?').get(id);
-  if (item) {
-    logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Логисты', 'Удалил: ' + item.name, 0, getIp(req), getUserAgent(req));
+  try {
+    const { id } = req.params;
+    const item = db.prepare('SELECT * FROM logisticians WHERE id = ?').get(id);
+    if (item) {
+      logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Логисты', 'Удалил: ' + item.name, 0, getIp(req), getUserAgent(req));
+    }
+    db.prepare('DELETE FROM logisticians WHERE id = ?').run(id);
+    redisFlushByPrefix('logisticians');
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Logistician delete error:', err);
+    res.status(500).json({ error: 'Ошибка базы данных: ' + err.message });
   }
-  db.prepare('DELETE FROM logisticians WHERE id = ?').run(id);
-  redisFlushByPrefix('logisticians');
-  res.json({ success: true });
 });
 
 /* ==========================================================================
@@ -3884,7 +3957,7 @@ app.post('/api/ext/v1/bookings', requireExtApi, async (req, res) => {
     const dayName = dayNames[new Date(slot.date + 'T00:00:00').getDay()];
     const whName = slot.warehouse_name || '';
     const whAddr = slot.warehouse_address ? ` (${slot.warehouse_address})` : '';
-    sendSms(phone, `Вы записаны на ${slot.date} (${dayName}) ${slot.time_start}–${slot.time_end}, ${typeLabel}, склад ${whName}${whAddr}${managerSmsSuffix(accounts.join('\n'))}`);
+    sendSms(phone, `Вы записаны на ${slot.date} (${dayName}) ${slot.time_start}–${slot.time_end}, ${typeLabel}, склад ${whName}${whAddr}${managerSmsSuffix(accounts.join('\n'))}${logisticianSmsSuffix()}`);
     redisFlushSlotsCache();
     res.json({ success: true, slotId: Number(slotId), confirmed: autoConfirmSlot, warning: bookingWarning || undefined });
   } catch (err) {

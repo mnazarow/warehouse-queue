@@ -61,7 +61,7 @@
   // Разметка окна вставляется скриптом — страницам достаточно подключить файл.
   const MARKUP = ''
     + '<div class="modal-overlay" id="myBookingModal">'
-    + '  <div class="modal" style="max-width:480px">'
+    + '  <div class="modal" style="max-width:520px;max-height:92vh;overflow-y:auto">'
     + '    <h2 id="myBookingTitle">Ваша запись</h2>'
     + '    <div id="myBookingAuth">'
     + '      <p style="color:#4a5568;font-size:0.92rem;line-height:1.45;margin:0 0 14px">Это окно занято. Если запись ваша — введите номер телефона, который указывали при записи, и мы покажем её детали.</p>'
@@ -72,6 +72,7 @@
     + '    </div>'
     + '    <div id="myBookingDetails" style="display:none">'
     + '      <ul class="mb-list" id="myBookingList"></ul>'
+    + '      <div id="myBookingDirections" style="display:none"></div>'
     + '      <div id="myBookingNote" style="display:none;margin-bottom:14px;padding:10px 12px;background:#fffaf0;border:1px solid #f6ad55;border-radius:8px;font-size:0.86rem;color:#7b341e;line-height:1.4"></div>'
     + '    </div>'
     + '    <div id="myBookingError" style="display:none;margin-bottom:14px;padding:10px 12px;background:#fff5f5;border:1px solid #fc8181;border-radius:8px;font-size:0.88rem;color:#c53030;line-height:1.4"></div>'
@@ -169,6 +170,15 @@
     row('Класс машины', b.vehicle_class_name);
     row('Вид загрузки', b.load_type_name);
     row('Записан', b.booked_at);
+    // Схема проезда до склада этой записи (описание, маршрут из Москвы,
+    // картинка-схема и ссылки на карты) — тот же блок, что в «Вы записаны!».
+    const dir = $('myBookingDirections');
+    if (b.warehouse_id && global.WhDirections) {
+      global.WhDirections.render(b.warehouse_id, dir);
+    } else {
+      dir.innerHTML = '';
+      dir.style.display = 'none';
+    }
     setMode('details');
     const note = $('myBookingNote');
     if (b.canCancel) {

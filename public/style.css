@@ -331,7 +331,10 @@ body.theme-hitech .review-list li { border-bottom-color: #1b2a4a; }
 body.theme-hitech .review-list span { color: #eaf3ff; }
 body.theme-hitech .field-error { color: #ff8ba1; }
 body.theme-hitech .form-group div[style*="f7fafc"] { background: #0c1426 !important; border-color: #223558 !important; }
-/* Блок «Как доехать» в окне успеха */
-body.theme-hitech #successDirections > div { background: #0c1426 !important; border-color: #223558 !important; }
-body.theme-hitech #successDirections div { color: #b9cdf2 !important; }
-body.theme-hitech #successDirections img { border-color: #223558 !important; }
+/* Блок «Как доехать» в окне успеха и в «Ваша запись» */
+body.theme-hitech #successDirections > div,
+body.theme-hitech #myBookingDirections > div { background: #0c1426 !important; border-color: #223558 !important; }
+body.theme-hitech #successDirections div,
+body.theme-hitech #myBookingDirections div { color: #b9cdf2 !important; }
+body.theme-hitech #successDirections img,
+body.theme-hitech #myBookingDirections img { border-color: #223558 !important; }
