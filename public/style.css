@@ -565,12 +565,15 @@ body.vk-page {
 }
 
 /* Логотип: знак + словесная часть, как на референсе */
-.vk-logo { display: flex; align-items: center; gap: 16px; text-decoration: none; }
-.vk-logo-mark { display: block; height: 52px; width: auto; }
+.vk-logo { display: flex; align-items: center; gap: 18px; text-decoration: none; }
+.vk-logo-mark { display: block; height: 60px; width: auto; }
+/* Надпись, как в референсе: обычный полужирный гротеск с разрядкой */
 .vk-logo-text {
-  font-size: 1.95rem; font-weight: 400; letter-spacing: 0.14em;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Roboto, Arial, sans-serif;
+  font-size: 1.62rem; font-weight: 650; letter-spacing: 0.13em;
   text-transform: uppercase; color: #1e3a63; line-height: 1;
 }
+@supports not (font-weight: 650) { .vk-logo-text { font-weight: 700; } }
 body.theme-hitech .vk-logo-text { color: #7df9ff; }
 
 /* Заголовок страницы — Oswald medium, как в референсе */
