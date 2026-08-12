@@ -71,7 +71,7 @@
     }
   </style>
 </head>
-<body>
+<body class="vk-page">
   <div id="waterMascot" aria-hidden="true">
     <svg viewBox="0 -44 104 116" width="104" height="116" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
       <defs>
@@ -105,32 +105,71 @@
     </svg>
   </div>
 
-  <div class="container">
-    <img src="/logo.png" alt="Логотип" class="logo">
-    <h1>Онлайн-запись на склад</h1>
+  <header class="vk-header">
+    <div class="vk-header-in">
+      <a href="/" class="vk-logo"><img src="/logo.png" alt="Логотип"></a>
+      <nav class="vk-nav">
+        <a href="#">Компания</a>
+        <a href="#">Продукция</a>
+        <a href="#">SPL PRO</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="container vk-body">
+    <h1 class="vk-title">Онлайн-запись на склад</h1>
     <p class="subtitle">Выберите дату и время для визита. Работаем в будние дни с 9:00 до 17:30.</p>
-    <p style="text-align:center;margin:-8px 0 16px;font-size:0.9rem">
-      <a href="/steps.html" style="color:#3182ce">Неудобно заполнять одну длинную форму? Запишитесь в три шага →</a>
+    <p class="vk-alt-link">
+      <a href="/steps.html">Неудобно заполнять одну длинную форму? Запишитесь в три шага →</a>
     </p>
     <div id="bookingMessageBanner" style="display:none;margin:0 0 16px;padding:12px 16px;background:#ebf8ff;border:1px solid #90cdf4;border-left:4px solid #3182ce;border-radius:8px;color:#2c5282;font-size:0.95rem;line-height:1.5;white-space:pre-wrap"></div>
 
-    <div class="tabs">
-      <button class="tab active" data-type="small">До 3-х товаров в накладной (15 мин), кроме крупногабаритного товара</button>
-      <button class="tab" data-type="bulk">Сборный заказ (30 мин), включая крупногабаритный товар</button>
+    <div class="vk-controls">
+      <div class="vk-col vk-col-date">
+        <div class="vk-label">Дата визита</div>
+        <input type="date" id="datePicker" class="vk-date">
+      </div>
+      <div class="vk-col">
+        <div class="vk-label">Склад выдачи</div>
+        <div id="warehouseSelector" class="warehouse-selector vk-radio-list"></div>
+      </div>
+      <div class="vk-col">
+        <div class="vk-label">Тип заказа</div>
+        <div class="vk-radio-list">
+          <button class="vk-radio tab active" data-type="small" type="button">
+            <span class="vk-dot"></span>
+            <span class="vk-radio-body">
+              <span class="t">До 3-х товаров в накладной (15 мин)</span>
+              <span class="s">Кроме крупногабаритного товара</span>
+            </span>
+          </button>
+          <button class="vk-radio tab" data-type="bulk" type="button">
+            <span class="vk-dot"></span>
+            <span class="vk-radio-body">
+              <span class="t">Сборный заказ (30 мин)</span>
+              <span class="s">Включая крупногабаритный товар</span>
+            </span>
+          </button>
+        </div>
+      </div>
     </div>
 
-    <div class="date-input">
-      <label for="datePicker">Выберите дату:</label>
-      <input type="date" id="datePicker">
-    </div>
-
-    <div class="date-input" style="margin-top:12px">
-      <label style="font-size:1.2rem;font-weight:700;color:#e53e3e;display:block;margin-bottom:8px">Выберите склад:</label>
-      <div id="warehouseSelector" class="warehouse-selector"></div>
+    <div class="vk-times-head">
+      <div>
+        <div class="vk-label">Время визита</div>
+        <div class="vk-sub" id="slotsDateNote">Доступные интервалы</div>
+      </div>
+      <span class="vk-badge" id="durationBadge">15 минут</span>
     </div>
 
     <div id="slotsContainer">
       <p class="no-slots">Выберите дату, чтобы увидеть свободные окна</p>
+    </div>
+
+    <div class="vk-legend">
+      <span><i class="l free"></i>Свободно</span>
+      <span><i class="l busy"></i>Занято</span>
+      <span><i class="l na"></i>Недоступно</span>
     </div>
   </div>
 
@@ -323,12 +362,28 @@
         // иначе ни одна карточка не активна и слоты не грузятся вовсе.
         const defaultWh = data.warehouses.find(w => w.is_default) || data.warehouses[0];
         for (const w of data.warehouses) {
-          const card = document.createElement('div');
-          card.className = 'wh-card';
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = 'wh-card vk-radio';
           if (defaultWh && w.id === defaultWh.id) { card.classList.add('active'); selectedId = w.id; }
           card.dataset.id = w.id;
           card.dataset.name = w.name;
-          card.textContent = w.name;
+          const dot = document.createElement('span');
+          dot.className = 'vk-dot';
+          const body = document.createElement('span');
+          body.className = 'vk-radio-body';
+          const t = document.createElement('span');
+          t.className = 't';
+          t.textContent = w.name;
+          body.appendChild(t);
+          if (w.address) {
+            const sub = document.createElement('span');
+            sub.className = 's';
+            sub.textContent = w.address;
+            body.appendChild(sub);
+          }
+          card.appendChild(dot);
+          card.appendChild(body);
           card.addEventListener('click', () => {
             container.querySelectorAll('.wh-card').forEach(c => c.classList.remove('active'));
             card.classList.add('active');
@@ -342,6 +397,7 @@
 
     async function loadSlots() {
       const date = datePicker.value;
+      updateSlotsDateNote();
       const activeCard = document.querySelector('#warehouseSelector .wh-card.active');
       const warehouseId = activeCard ? activeCard.dataset.id : '';
       if (!date) return;
@@ -383,7 +439,7 @@
         let clickHandler = '';
         if (slot.past) {
           cssClass = 'booked past';
-          labelText = 'Просрочено';
+          labelText = 'Недоступно';
         } else if (slot.completed) {
           cssClass = 'booked completed';
           labelText = 'Выполнено';
@@ -400,6 +456,7 @@
           cssClass = 'booked';
           labelText = 'Занято';
         } else {
+          cssClass = 'free';
           labelText = 'Свободно';
           clickHandler = `showWarehouseConfirm(${slot.id}, '${jsStr(slot.time_start)}', '${jsStr(slot.time_end)}')`;
         }
@@ -413,13 +470,28 @@
         }
         html += `
           <div class="slot ${cssClass}" data-id="${escapeHtml(slot.id)}" onclick="${escapeHtml(clickHandler)}">
-            <div class="time">${escapeHtml(slot.time_start)} – ${escapeHtml(slot.time_end)}</div>
+            <div class="time">${escapeHtml(slot.time_start)}–${escapeHtml(slot.time_end)}</div>
             <div class="label">${escapeHtml(labelText)}</div>
           </div>
         `;
       }
       html += '</div>';
       slotsContainer.innerHTML = html;
+    }
+
+    // Подпись «Доступные интервалы на среду, 12 августа» под заголовком.
+    function updateSlotsDateNote() {
+      const el = document.getElementById('slotsDateNote');
+      if (!el || !datePicker.value) return;
+      const d = new Date(datePicker.value + 'T00:00:00');
+      const days = ['воскресенье', 'понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу'];
+      const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+      el.textContent = `Доступные интервалы на ${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]}`;
+    }
+
+    function updateDurationBadge() {
+      const el = document.getElementById('durationBadge');
+      if (el) el.textContent = currentType === 'small' ? '15 минут' : '30 минут';
     }
 
     function updateAccountCounter() {
@@ -707,6 +779,7 @@
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         currentType = tab.dataset.type;
+        updateDurationBadge();
         loadSlots();
       });
     });
@@ -743,6 +816,8 @@
 
     MyBooking.init({ onChange: loadSlots });
     initDate();
+    updateSlotsDateNote();
+    updateDurationBadge();
     loadWarehouses();
     loadAllowNoAccount();
     loadBookingMessage();

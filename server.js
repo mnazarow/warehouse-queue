@@ -897,7 +897,7 @@ function logCheck(accounts, url, success, status, body, error, reqBody) {
 }
 
 app.get('/api/warehouses', (req, res) => {
-  const list = db.prepare('SELECT id, name, is_default FROM warehouses ORDER BY is_default DESC, name').all();
+  const list = db.prepare('SELECT id, name, address, is_default FROM warehouses ORDER BY is_default DESC, name').all();
   res.json({ warehouses: list });
 });
 
