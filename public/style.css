@@ -751,3 +751,65 @@ body.vk-page .vk-alt-link a { color: #0d4d8f; }
 body.vk-page:not(.theme-hitech) .blink-red {
   color: #0d4d8f !important;
 }
+
+/* --- Заголовок страницы записи — компактнее --- */
+body.vk-page .vk-title { font-size: clamp(21px, 2.6vw, 30px); }
+@media (max-width: 1000px) { body.vk-page .vk-title { font-size: 1.45rem; } }
+
+/* ==========================================================================
+   Мастер записи в три шага (steps.html) — тот же дизайн, что страница записи
+   ========================================================================== */
+body.vk-page .page-switch { margin-bottom: 12px; }
+body.vk-page .page-switch a { color: #0d4d8f; font-size: 13px; }
+
+body.vk-page .wizard {
+  border: 1px solid #dfe6ee; border-radius: 12px; padding: 26px; background: #fff; margin-top: 4px;
+}
+body.vk-page .wizard-summary {
+  background: #eaf2fb; border: 1px solid #c4d9ef; border-radius: 8px;
+  color: #18202a; font-size: 13px;
+}
+body.vk-page .wizard-summary b { color: #18202a; }
+body.vk-page .wizard-summary .wh { color: #0d4d8f; font-weight: 700; }
+
+body.vk-page .stepper .st { color: #697586; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+body.vk-page .stepper .st .num { background: #f2f6fa; border: 1px solid #d6e0eb; color: #697586; }
+body.vk-page .stepper .st.active { color: #18202a; }
+body.vk-page .stepper .st.active .num { background: #0d4d8f; border-color: #0d4d8f; color: #fff; }
+body.vk-page .stepper .st.done { color: #0d4d8f; }
+body.vk-page .stepper .st.done .num { background: #eaf2fb; border-color: #0d4d8f; color: #0d4d8f; }
+
+body.vk-page .step h3 {
+  font-size: 14px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #18202a;
+}
+body.vk-page .step .step-hint { color: #697586; font-size: 13px; }
+
+body.vk-page .wizard .form-group > label,
+body.vk-page .wizard label[for] {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.055em;
+  text-transform: uppercase; color: #18202a;
+}
+body.vk-page .wizard textarea,
+body.vk-page .wizard select,
+body.vk-page .wizard input[type="text"],
+body.vk-page .wizard input[type="tel"],
+body.vk-page .wizard input[type="number"] {
+  padding: 12px 16px; border: 1px solid #d8e0ea; border-radius: 8px;
+  font-size: 14px; color: #18202a; background: #fff;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+body.vk-page .wizard textarea:focus,
+body.vk-page .wizard select:focus,
+body.vk-page .wizard input:focus {
+  outline: none; border-color: #0d4d8f; box-shadow: 0 0 0 3px rgba(13,77,143,0.1);
+}
+/* согласие ПД и «проверьте данные» — обычный текст, не капс */
+body.vk-page .wizard #fgConsent label {
+  text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 13px;
+}
+body.vk-page .review-list { color: #697586; font-size: 13px; }
+body.vk-page .review-list li { border-bottom: 1px dashed #e7edf3; }
+body.vk-page .review-list span { color: #18202a; }
+body.vk-page .wizard .review-box {
+  background: #f7f9fc !important; border: 1px solid #e8edf3 !important; border-radius: 8px !important;
+}

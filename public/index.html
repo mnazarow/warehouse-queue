@@ -116,14 +116,11 @@
   <div class="container vk-body">
     <h1 class="vk-title">Онлайн-запись на склад</h1>
     <p class="subtitle">Выберите дату и время для визита. Работаем в будние дни с 9:00 до 17:30.</p>
-    <p class="vk-alt-link">
-      <a href="/steps.html">Неудобно заполнять одну длинную форму? Запишитесь в три шага →</a>
-    </p>
     <div id="bookingMessageBanner" style="display:none;margin:0 0 16px;padding:12px 16px;background:#ebf8ff;border:1px solid #90cdf4;border-left:4px solid #3182ce;border-radius:8px;color:#2c5282;font-size:0.95rem;line-height:1.5;white-space:pre-wrap"></div>
 
     <div class="vk-controls">
       <div class="vk-col vk-col-date">
-        <div class="vk-label">Дата визита</div>
+        <div class="vk-label">Выберите дату визита</div>
         <input type="date" id="datePicker" class="vk-date">
       </div>
       <div class="vk-col">
@@ -375,7 +372,7 @@
         for (const w of data.warehouses) {
           const card = document.createElement('button');
           card.type = 'button';
-          card.className = 'wh-card vk-radio';
+          card.className = 'wh-card vk-radio vk-radio-sm';
           if (defaultWh && w.id === defaultWh.id) { card.classList.add('active'); selectedId = w.id; }
           card.dataset.id = w.id;
           card.dataset.name = w.name;

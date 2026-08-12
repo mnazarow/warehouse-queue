@@ -87,32 +87,68 @@
     }
   </style>
 </head>
-<body>
-  <div class="container">
+<body class="vk-page">
+  <header class="vk-header">
+    <div class="vk-header-in">
+      <a href="/" class="vk-logo">
+        <img src="/logo.png" alt="Водокомфорт" class="vk-logo-image">
+      </a>
+    </div>
+  </header>
+
+  <div class="container vk-body">
     <div class="page-switch"><a href="/">← Обычная форма записи (одно окно)</a></div>
-    <img src="/logo.png" alt="Логотип" class="logo">
-    <h1>Онлайн-запись на склад в три шага</h1>
+    <h1 class="vk-title">Онлайн-запись на склад в три шага</h1>
     <p class="subtitle">Выберите дату и время визита, затем заполните три коротких шага. Работаем в будние дни с 9:00 до 17:30.</p>
     <div id="bookingMessageBanner" style="display:none;margin:0 0 16px;padding:12px 16px;background:#ebf8ff;border:1px solid #90cdf4;border-left:4px solid #3182ce;border-radius:8px;color:#2c5282;font-size:0.95rem;line-height:1.5;white-space:pre-wrap"></div>
 
     <div id="pickerBlock">
-      <div class="tabs">
-        <button class="tab active" data-type="small">До 3-х товаров в накладной (15 мин), кроме крупногабаритного товара</button>
-        <button class="tab" data-type="bulk">Сборный заказ (30 мин), включая крупногабаритный товар</button>
+      <div class="vk-controls">
+        <div class="vk-col vk-col-date">
+          <div class="vk-label">Выберите дату визита</div>
+          <input type="date" id="datePicker" class="vk-date">
+        </div>
+        <div class="vk-col">
+          <div class="vk-label">Склад выдачи</div>
+          <div id="warehouseSelector" class="warehouse-selector vk-radio-list"></div>
+        </div>
+        <div class="vk-col">
+          <div class="vk-label">Тип заказа</div>
+          <div class="vk-radio-list">
+            <button class="vk-radio vk-radio-sm tab active" data-type="small" type="button">
+              <span class="vk-dot"></span>
+              <span class="vk-radio-body">
+                <span class="t">До 3-х товаров в накладной (15 мин)</span>
+                <span class="s">Кроме крупногабаритного товара</span>
+              </span>
+            </button>
+            <button class="vk-radio vk-radio-sm tab" data-type="bulk" type="button">
+              <span class="vk-dot"></span>
+              <span class="vk-radio-body">
+                <span class="t">Сборный заказ (30 мин)</span>
+                <span class="s">Включая крупногабаритный товар</span>
+              </span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div class="date-input">
-        <label for="datePicker">Выберите дату:</label>
-        <input type="date" id="datePicker">
-      </div>
-
-      <div class="date-input" style="margin-top:12px">
-        <label style="font-size:1.2rem;font-weight:700;color:#e53e3e;display:block;margin-bottom:8px">Выберите склад:</label>
-        <div id="warehouseSelector" class="warehouse-selector"></div>
+      <div class="vk-times-head">
+        <div>
+          <div class="vk-label">Время визита</div>
+          <div class="vk-sub" id="slotsDateNote">Доступные интервалы</div>
+        </div>
+        <span class="vk-badge" id="durationBadge">15 минут</span>
       </div>
 
       <div id="slotsContainer">
         <p class="no-slots">Выберите дату, чтобы увидеть свободные окна</p>
+      </div>
+
+      <div class="vk-legend">
+        <span><i class="l free"></i>Свободно</span>
+        <span><i class="l busy"></i>Занято</span>
+        <span><i class="l na"></i>Просрочено</span>
       </div>
     </div>
 
@@ -201,7 +237,7 @@
           <div class="field-error" id="errLoadType"></div>
         </div>
 
-        <div class="form-group" style="background:#f7fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+        <div class="form-group review-box" style="background:#f7fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
           <label style="margin-bottom:6px">Проверьте данные</label>
           <ul class="review-list" id="reviewList"></ul>
         </div>
@@ -327,12 +363,28 @@
         // Склад по умолчанию: помеченный is_default, иначе первый в списке.
         const defaultWh = data.warehouses.find(w => w.is_default) || data.warehouses[0];
         for (const w of data.warehouses) {
-          const card = document.createElement('div');
-          card.className = 'wh-card';
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = 'wh-card vk-radio vk-radio-sm';
           if (defaultWh && w.id === defaultWh.id) card.classList.add('active');
           card.dataset.id = w.id;
           card.dataset.name = w.name;
-          card.textContent = w.name;
+          const dot = document.createElement('span');
+          dot.className = 'vk-dot';
+          const body = document.createElement('span');
+          body.className = 'vk-radio-body';
+          const t = document.createElement('span');
+          t.className = 't';
+          t.textContent = w.name;
+          body.appendChild(t);
+          if (w.address) {
+            const sub = document.createElement('span');
+            sub.className = 's';
+            sub.textContent = w.address;
+            body.appendChild(sub);
+          }
+          card.appendChild(dot);
+          card.appendChild(body);
           card.addEventListener('click', () => {
             container.querySelectorAll('.wh-card').forEach(c => c.classList.remove('active'));
             card.classList.add('active');
@@ -351,8 +403,23 @@
       return card ? { id: card.dataset.id, name: card.dataset.name } : { id: '', name: '' };
     }
 
+    function updateSlotsDateNote() {
+      const el = $('slotsDateNote');
+      if (!el || !datePicker.value) return;
+      const d = new Date(datePicker.value + 'T00:00:00');
+      const days = ['воскресенье', 'понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу'];
+      const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+      el.textContent = `Доступные интервалы на ${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]}`;
+    }
+
+    function updateDurationBadge() {
+      const el = $('durationBadge');
+      if (el) el.textContent = currentType === 'small' ? '15 минут' : '30 минут';
+    }
+
     async function loadSlots() {
       const date = datePicker.value;
+      updateSlotsDateNote();
       if (!date) return;
       const wh = activeWarehouse();
       slotsContainer.innerHTML = '<p class="no-slots">Загрузка...</p>';
@@ -398,7 +465,7 @@
         else if (slot.in_progress) { cssClass = 'booked in-progress'; labelText = 'У кладовщика'; }
         else if (slot.is_booked && slot.confirmed) { cssClass = 'booked confirmed'; labelText = 'Подтверждён'; }
         else if (slot.is_booked) { cssClass = 'booked'; labelText = 'Занято'; }
-        else { free = true; }
+        else { free = true; cssClass = 'free'; }
 
         const isMine = slot.is_booked && mine.has(Number(slot.id));
         if (isMine) { cssClass += ' mine'; labelText = 'Ваша запись'; }
@@ -862,6 +929,7 @@
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         currentType = tab.dataset.type;
+        updateDurationBadge();
         loadSlots();
       });
     });
@@ -891,6 +959,8 @@
 
     MyBooking.init({ onChange: function () { if (!selected) loadSlots(); } });
     initDate();
+    updateSlotsDateNote();
+    updateDurationBadge();
     loadWarehouses();
     loadAllowNoAccount();
     loadRequiredFields();
