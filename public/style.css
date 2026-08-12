@@ -374,94 +374,93 @@ body.vk-page:not(.theme-hitech) { color: #1c2a3a; }
 .vk-step-line { width: 120px; height: 2px; background: #c9d6e6; margin-top: 20px; }
 
 body.vk-page:not(.theme-hitech) .vk-body {
-  max-width: 1320px; margin: 6px auto 40px; padding: 34px 40px 28px;
+  max-width: 1340px; margin: 10px auto 44px; padding: 42px 46px 30px;
   background: #fff; border: 1px solid #e6ecf4; border-radius: 14px;
   box-shadow: 0 6px 30px rgba(18,60,126,0.05);
 }
 .vk-title {
-  color: #1d4e9e; text-transform: uppercase; font-weight: 800;
-  font-size: 2.5rem; letter-spacing: 0.01em; line-height: 1.1; margin-bottom: 6px;
-  font-stretch: condensed;
+  color: #2456a4; text-transform: uppercase;
+  margin-bottom: 6px;
 }
 body.vk-page .subtitle { margin-bottom: 8px; }
 .vk-alt-link { margin: 0 0 22px; font-size: 0.88rem; }
 .vk-alt-link a { color: #1d4e9e; }
 
 .vk-label {
-  font-family: 'WQ Condensed', 'Oswald', 'PT Sans Narrow', 'Arial Narrow', Arial, sans-serif;
-  font-size: 0.92rem; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase;
-  color: #1c2a3a; margin-bottom: 10px;
+  font-size: 0.82rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #1f3247; margin-bottom: 12px;
 }
-.vk-controls { display: grid; grid-template-columns: 320px 1fr 1fr; gap: 28px; margin-bottom: 28px; }
+.vk-controls { display: grid; grid-template-columns: 320px 1fr 1fr; gap: 34px; margin-bottom: 34px; }
 .vk-date {
-  width: 100%; padding: 14px 14px; border: 1px solid #c9d6e6; border-radius: 8px;
-  font-size: 1.05rem; font-family: inherit; color: #1c2a3a; background: #fff;
-  letter-spacing: 0.06em;
+  width: 100%; padding: 16px 16px; border: 1px solid #c9d6e6; border-radius: 8px;
+  font-size: 1.08rem; font-family: inherit; color: #23364d; background: #fff;
+  letter-spacing: 0.14em;
 }
 .vk-date:focus { outline: none; border-color: #1d4e9e; box-shadow: 0 0 0 3px rgba(29,78,158,0.12); }
 
 .vk-radio-list { display: flex; flex-direction: column; gap: 12px; }
 body.vk-page:not(.theme-hitech) .vk-radio {
-  display: flex; align-items: flex-start; gap: 12px; width: 100%; text-align: left;
-  padding: 14px 16px; background: #fff; border: 1px solid #c9d6e6; border-radius: 10px;
+  display: flex; align-items: flex-start; gap: 14px; width: 100%; text-align: left;
+  padding: 17px 18px; background: #fff; border: 1px solid #cdd9e8; border-radius: 12px;
   cursor: pointer; font-family: inherit; transition: all 0.15s ease;
 }
 body.vk-page:not(.theme-hitech) .vk-radio:hover { border-color: #1d4e9e; }
 body.vk-page:not(.theme-hitech) .vk-radio.active {
-  background: #e8f0fa; border: 2px solid #123c7e; padding: 13px 15px;
+  background: #e8f0fa; border: 2px solid #123c7e; padding: 16px 17px;
 }
 .vk-dot {
-  flex-shrink: 0; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%;
+  flex-shrink: 0; width: 26px; height: 26px; margin-top: 0; border-radius: 50%;
   border: 2px solid #b6c6da; background: #fff; position: relative;
 }
 .vk-radio.active .vk-dot { border-color: #123c7e; }
 .vk-radio.active .vk-dot::after {
-  content: ''; position: absolute; inset: 3px; border-radius: 50%; background: #123c7e;
+  content: ''; position: absolute; inset: 4px; border-radius: 50%; background: #123c7e;
 }
 .vk-radio-body { display: flex; flex-direction: column; gap: 3px; }
+.vk-radio-body { gap: 5px; }
 .vk-radio-body .t {
-  font-size: 0.85rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #1c2a3a;
+  font-size: 0.9rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #1f3247;
 }
 .vk-radio-body .s {
-  font-size: 0.74rem; letter-spacing: 0.05em; text-transform: uppercase; color: #8fa3bd;
+  font-size: 0.76rem; letter-spacing: 0.08em; text-transform: uppercase; color: #9db0c7;
 }
 .vk-radio.active .vk-radio-body .t { color: #123c7e; }
 
 .vk-times-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-.vk-sub { font-size: 0.85rem; color: #8fa3bd; margin-top: -4px; }
+.vk-sub { font-size: 0.88rem; color: #9db0c7; margin-top: -2px; }
 .vk-badge {
-  background: #e8f0fa; color: #1d4e9e; font-size: 0.78rem; font-weight: 700;
-  letter-spacing: 0.08em; text-transform: uppercase; padding: 7px 14px; border-radius: 8px;
+  background: #e3edf9; color: #2456a4; font-size: 0.8rem; font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase; padding: 8px 16px; border-radius: 8px;
 }
 
 /* Сетка интервалов в стиле референса */
 body.vk-page:not(.theme-hitech) .slots-grid {
-  display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px;
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 14px;
 }
 body.vk-page:not(.theme-hitech) .slot {
-  background: #fff; border: 1px solid #dde6f0; border-radius: 8px;
-  padding: 12px 6px; text-align: center; cursor: pointer; transition: all 0.12s ease;
+  background: #fff; border: 1px solid #dde6f0; border-radius: 10px;
+  padding: 17px 8px; text-align: center; cursor: pointer; transition: all 0.12s ease;
 }
-body.vk-page:not(.theme-hitech) .slot .time { font-size: 0.92rem; font-weight: 700; color: #23364d; margin-bottom: 4px; }
+body.vk-page:not(.theme-hitech) .slot .time { font-size: 1rem; font-weight: 600; color: #23364d; margin-bottom: 7px; letter-spacing: 0.01em; }
 body.vk-page:not(.theme-hitech) .slot .label {
-  font-size: 0.66rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #8fa3bd;
+  font-size: 0.68rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #9db0c7;
 }
-body.vk-page:not(.theme-hitech) .slot.free { border-color: #9db9de; }
-body.vk-page:not(.theme-hitech) .slot.free .label { color: #1d4e9e; }
+body.vk-page:not(.theme-hitech) .slot.free { border-color: #a9c3e2; }
+body.vk-page:not(.theme-hitech) .slot.free .label { color: #2456a4; }
 body.vk-page:not(.theme-hitech) .slot.free:hover { border-color: #1d4e9e; box-shadow: 0 2px 10px rgba(29,78,158,0.14); transform: translateY(-1px); }
 body.vk-page:not(.theme-hitech) .slot.free.selected {
-  background: #e8f0fa; border: 2px solid #123c7e; padding: 11px 5px;
+  background: #e8f0fa; border: 2px solid #123c7e; padding: 16px 7px;
 }
 body.vk-page:not(.theme-hitech) .slot.free.selected .time { color: #123c7e; }
 body.vk-page:not(.theme-hitech) .slot.booked {
-  background: #f2f5f9; border-color: #e6ecf4;
+  background: #eef2f7; border-color: #e2e9f1;
 }
-body.vk-page:not(.theme-hitech) .slot.booked .time { color: #9caec3; }
+body.vk-page:not(.theme-hitech) .slot.booked .time { color: #94a5ba; }
 body.vk-page:not(.theme-hitech) .slot.past {
-  background: #f8fafc; border-color: #eef2f7; cursor: default;
+  background: #f6f8fb; border-color: #e9eef5; cursor: default;
 }
-body.vk-page:not(.theme-hitech) .slot.past .time { color: #c3cfdd; }
-body.vk-page:not(.theme-hitech) .slot.past .label { color: #c3cfdd; }
+body.vk-page:not(.theme-hitech) .slot.past .time { color: #b9c6d6; }
+body.vk-page:not(.theme-hitech) .slot.past .label { color: #c4d0de; }
 body.vk-page:not(.theme-hitech) .slot.mine { background: #e9f8ef; border-color: #38a169; }
 body.vk-page:not(.theme-hitech) .slot.mine .time,
 body.vk-page:not(.theme-hitech) .slot.mine .label { color: #276749; }
@@ -566,14 +565,14 @@ body.vk-page {
 }
 
 /* Логотип: знак + словесная часть, как на референсе */
-.vk-logo { display: flex; align-items: center; gap: 14px; text-decoration: none; }
-.vk-logo-mark { display: block; height: 46px; width: auto; }
+.vk-logo { display: flex; align-items: center; gap: 16px; text-decoration: none; }
+.vk-logo-mark { display: block; height: 52px; width: auto; }
 .vk-logo-text {
-  font-size: 1.78rem; font-weight: 700; letter-spacing: 0.12em;
+  font-size: 1.95rem; font-weight: 400; letter-spacing: 0.14em;
   text-transform: uppercase; color: #1e3a63; line-height: 1;
 }
 body.theme-hitech .vk-logo-text { color: #7df9ff; }
 
 /* Заголовок страницы — Oswald medium, как в референсе */
-.vk-title { font-weight: 700; font-size: 3.1rem; letter-spacing: 0.015em; }
+.vk-title { font-weight: 400; font-size: 3.5rem; letter-spacing: 0.005em; line-height: 1.04; }
 @media (max-width: 1000px) { .vk-title { font-size: 1.9rem; } }
