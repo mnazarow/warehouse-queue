@@ -148,7 +148,7 @@ if (dbTypeRow && dbTypeRow.value === 'postgresql') {
     dbAdapter.setPg(pgConf);
     console.log('Switched to PostgreSQL backend');
   } catch (e) {
-    console.error('Failed to switch to PostgreSQL, using SQLite:', psqlErrorLine(e.stderr || e.message));
+    console.error('Failed to switch to PostgreSQL, using SQLite:', psqlErrorLine(e));
     dbAdapter.setSqlite(sqliteDb);
   }
 }
@@ -4232,7 +4232,13 @@ function psqlEnv(config) {
 // Первая осмысленная строка ошибки psql: perl-предупреждения о локали
 // пропускаем — они маскировали настоящую причину («PostgreSQL недоступен:
 // perl: warning: Setting locale failed»).
-function psqlErrorLine(raw) {
+function psqlErrorLine(err) {
+  // err — объект ошибки execFileSync либо строка. Склеиваем stderr+stdout+message:
+  // при тайм-ауте stderr содержит только perl-шум, а причина — в message.
+  var raw = err;
+  if (err && typeof err === 'object') {
+    raw = [err.stderr, err.stdout, err.message].filter(Boolean).join('\n');
+  }
   var lines = String(raw || '').split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
   var meaningful = lines.filter(function(l) {
     return !/^perl: warning/i.test(l)
@@ -4242,7 +4248,14 @@ function psqlErrorLine(raw) {
       && !/are supported and installed/i.test(l)
       && !/Falling back to/i.test(l);
   });
-  return meaningful[0] || lines[0] || 'Connection failed';
+  var line = meaningful[0] || lines[0] || 'Connection failed';
+  if (/ETIMEDOUT/i.test(line)) {
+    return 'тайм-аут подключения — PostgreSQL не отвечает (проверьте хост/порт, что сервер запущен и доступен по сети)';
+  }
+  if (/ENOENT/.test(line) && /psql/.test(line)) {
+    return 'команда psql не найдена — установите клиент: apt install postgresql-client';
+  }
+  return line;
 }
 
 function psqlArgs(config) {
@@ -4423,7 +4436,7 @@ app.post('/api/manager/switch/to-pgsql', requireManager, function(req, res) {
   try {
     testChild = require('child_process').execFileSync('psql', ['-h', config.host, '-p', String(config.port), '-U', config.user, '-d', config.database, '-w', '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=config.password||'';e.LC_ALL='C';e.LANG='C';e.PERL_BADLANG='0';return e;})(Object.assign({},process.env)), timeout: 10000, encoding: 'utf8' });
   } catch (e) {
-    var msg = psqlErrorLine(e.stderr || e.message);
+    var msg = psqlErrorLine(e);
     return res.json({ success: false, error: 'PostgreSQL недоступен: ' + msg });
   }
   dbAdapter.setPg(config);
