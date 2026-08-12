@@ -53,7 +53,7 @@ function runPsql(translatedSql, tuplesOnly) {
   // PGPASSWORD psql зависает на запросе «Password for user…», блокируя запрос.
   var args = ['-h', pgConfig.host, '-p', String(pgConfig.port), '-U', pgConfig.user, '-d', pgConfig.database, '-w', '-A', '-X', '-v', 'ON_ERROR_STOP=1'];
   if (tuplesOnly) args.push('-t', '-q');
-  var env = Object.assign({}, process.env, { PGPASSWORD: pgConfig.password || '' });
+  var env = Object.assign({}, process.env, { PGPASSWORD: pgConfig.password || '', LC_ALL: 'C', LANG: 'C', PERL_BADLANG: '0' });
   var body = translatedSql.trim();
   if (!body.endsWith(';')) body += ';';
   try {
@@ -61,6 +61,15 @@ function runPsql(translatedSql, tuplesOnly) {
   } catch (e) {
     var msg = e.stderr ? e.stderr.trim() : e.message;
     if (!msg && e.stdout) msg = e.stdout.trim();
+    // Отбрасываем perl-предупреждения о локали — оставляем суть ошибки.
+    if (msg) {
+      var lines = msg.split('\n').filter(function(l) {
+        return !/^perl: warning/i.test(l) && !/Setting locale failed/i.test(l)
+          && !/Please check that your locale/i.test(l) && !/are supported and installed/i.test(l)
+          && !/^\s*(LANGUAGE|LC_ALL|LC_CTYPE|LANG)\s*=/.test(l) && !/Falling back to/i.test(l);
+      });
+      if (lines.length) msg = lines.join('\n').trim();
+    }
     throw new Error(msg || 'psql error');
   }
 }

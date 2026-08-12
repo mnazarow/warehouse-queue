@@ -144,11 +144,11 @@ if (dbTypeRow && dbTypeRow.value === 'postgresql') {
   };
   try {
     // Test PG connection before switching
-    var testChild = require('child_process').execFileSync('psql', ['-h', pgConf.host, '-p', String(pgConf.port), '-U', pgConf.user, '-d', pgConf.database, '-w', '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=pgConf.password||'';return e;})(Object.assign({},process.env)), timeout: 5000, encoding: 'utf8' });
+    var testChild = require('child_process').execFileSync('psql', ['-h', pgConf.host, '-p', String(pgConf.port), '-U', pgConf.user, '-d', pgConf.database, '-w', '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=pgConf.password||'';e.LC_ALL='C';e.LANG='C';e.PERL_BADLANG='0';return e;})(Object.assign({},process.env)), timeout: 5000, encoding: 'utf8' });
     dbAdapter.setPg(pgConf);
     console.log('Switched to PostgreSQL backend');
   } catch (e) {
-    console.error('Failed to switch to PostgreSQL, using SQLite:', (e.stderr || e.message || '').trim().split('\n')[0]);
+    console.error('Failed to switch to PostgreSQL, using SQLite:', psqlErrorLine(e.stderr || e.message));
     dbAdapter.setSqlite(sqliteDb);
   }
 }
@@ -4220,7 +4220,29 @@ function psqlEnv(config) {
   var env = {};
   for (var k in process.env) env[k] = process.env[k];
   env.PGPASSWORD = config.password;
+  // Debian/Ubuntu: /usr/bin/psql — perl-обёртка; при сломанной локали она
+  // сыплет «perl: warning: Setting locale failed» в stderr. LC_ALL=C убирает
+  // предупреждения, PERL_BADLANG=0 глушит их у perl.
+  env.LC_ALL = 'C';
+  env.LANG = 'C';
+  env.PERL_BADLANG = '0';
   return env;
+}
+
+// Первая осмысленная строка ошибки psql: perl-предупреждения о локали
+// пропускаем — они маскировали настоящую причину («PostgreSQL недоступен:
+// perl: warning: Setting locale failed»).
+function psqlErrorLine(raw) {
+  var lines = String(raw || '').split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+  var meaningful = lines.filter(function(l) {
+    return !/^perl: warning/i.test(l)
+      && !/Setting locale failed/i.test(l)
+      && !/Please check that your locale/i.test(l)
+      && !/^(LANGUAGE|LC_ALL|LC_CTYPE|LANG)\s*=/.test(l)
+      && !/are supported and installed/i.test(l)
+      && !/Falling back to/i.test(l);
+  });
+  return meaningful[0] || lines[0] || 'Connection failed';
 }
 
 function psqlArgs(config) {
@@ -4399,9 +4421,9 @@ app.post('/api/manager/switch/to-pgsql', requireManager, function(req, res) {
   var config = getPgSqlConfig();
   var testChild;
   try {
-    testChild = require('child_process').execFileSync('psql', ['-h', config.host, '-p', String(config.port), '-U', config.user, '-d', config.database, '-w', '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=config.password||'';return e;})(Object.assign({},process.env)), timeout: 10000, encoding: 'utf8' });
+    testChild = require('child_process').execFileSync('psql', ['-h', config.host, '-p', String(config.port), '-U', config.user, '-d', config.database, '-w', '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=config.password||'';e.LC_ALL='C';e.LANG='C';e.PERL_BADLANG='0';return e;})(Object.assign({},process.env)), timeout: 10000, encoding: 'utf8' });
   } catch (e) {
-    var msg = (e.stderr || e.message || '').trim().split('\n')[0] || 'Connection failed';
+    var msg = psqlErrorLine(e.stderr || e.message);
     return res.json({ success: false, error: 'PostgreSQL недоступен: ' + msg });
   }
   dbAdapter.setPg(config);
