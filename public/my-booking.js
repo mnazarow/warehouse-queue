@@ -477,33 +477,4 @@
     return svg;
   }
 
-  /* ------------------------------------------------------------------
-   * Тема Hi-Tech: переключатель в углу страницы, выбор запоминается
-   * в браузере и применяется до отрисовки (скрипт подключён в <body>).
-   * ------------------------------------------------------------------ */
-  (function () {
-    var KEY = 'ui_theme';
-    var saved = '';
-    try { saved = localStorage.getItem(KEY) || ''; } catch (e) {}
-    if (saved === 'hitech') document.body.classList.add('theme-hitech');
-
-    function makeBtn() {
-      var btn = document.createElement('button');
-      btn.id = 'themeToggle';
-      btn.type = 'button';
-      btn.title = 'Переключить тему оформления';
-      function label() {
-        btn.textContent = document.body.classList.contains('theme-hitech') ? '☀ Классическая' : '⚡ Hi-Tech';
-      }
-      btn.addEventListener('click', function () {
-        document.body.classList.toggle('theme-hitech');
-        try { localStorage.setItem(KEY, document.body.classList.contains('theme-hitech') ? 'hitech' : 'classic'); } catch (e) {}
-        label();
-      });
-      label();
-      document.body.appendChild(btn);
-    }
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', makeBtn);
-    else makeBtn();
-  })();
 })(window);
