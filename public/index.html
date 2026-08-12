@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Запись в очередь на склад</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap&subset=cyrillic" media="print" onload="this.media='all'">
   <style>
     #bookingModal .modal { font-size: 0.75rem; }
     #bookingModal .modal h2 { font-size: 1rem; }
@@ -170,7 +167,7 @@
     <div class="vk-legend">
       <span><i class="l free"></i>Свободно</span>
       <span><i class="l busy"></i>Занято</span>
-      <span><i class="l na"></i>Недоступно</span>
+      <span><i class="l na"></i>Просрочено</span>
     </div>
   </div>
 
@@ -440,7 +437,7 @@
         let clickHandler = '';
         if (slot.past) {
           cssClass = 'booked past';
-          labelText = 'Недоступно';
+          labelText = 'Просрочено';
         } else if (slot.completed) {
           cssClass = 'booked completed';
           labelText = 'Выполнено';

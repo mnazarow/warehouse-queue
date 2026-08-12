@@ -388,7 +388,8 @@ body.vk-page .subtitle { margin-bottom: 8px; }
 .vk-alt-link a { color: #1d4e9e; }
 
 .vk-label {
-  font-size: 0.8rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  font-family: 'WQ Condensed', 'Oswald', 'PT Sans Narrow', 'Arial Narrow', Arial, sans-serif;
+  font-size: 0.92rem; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase;
   color: #1c2a3a; margin-bottom: 10px;
 }
 .vk-controls { display: grid; grid-template-columns: 320px 1fr 1fr; gap: 28px; margin-bottom: 28px; }
@@ -556,21 +557,23 @@ body.vk-page #themeToggle { top: 96px; right: 20px; }
 }
 
 body.vk-page {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Roboto, Arial, sans-serif;
 }
+/* Сжатый фирменный шрифт поставляется с сайтом (/fonts) — вид одинаковый
+   на всех устройствах и без интернета. */
 .vk-cond, .vk-title, .vk-logo-text {
-  font-family: 'Oswald', 'PT Sans Narrow', 'Arial Narrow', 'WQ Condensed', 'Arial', sans-serif;
+  font-family: 'WQ Condensed', 'Oswald', 'PT Sans Narrow', 'Arial Narrow', Arial, sans-serif;
 }
 
 /* Логотип: знак + словесная часть, как на референсе */
 .vk-logo { display: flex; align-items: center; gap: 14px; text-decoration: none; }
 .vk-logo-mark { display: block; height: 46px; width: auto; }
 .vk-logo-text {
-  font-size: 1.72rem; font-weight: 500; letter-spacing: 0.12em;
+  font-size: 1.78rem; font-weight: 700; letter-spacing: 0.12em;
   text-transform: uppercase; color: #1e3a63; line-height: 1;
 }
 body.theme-hitech .vk-logo-text { color: #7df9ff; }
 
 /* Заголовок страницы — Oswald medium, как в референсе */
-.vk-title { font-weight: 500; font-size: 3rem; letter-spacing: 0.02em; }
+.vk-title { font-weight: 700; font-size: 3.1rem; letter-spacing: 0.015em; }
 @media (max-width: 1000px) { .vk-title { font-size: 1.9rem; } }
