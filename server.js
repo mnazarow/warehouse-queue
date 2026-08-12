@@ -409,9 +409,12 @@ function ensureFeatureSchema() {
     if (dbAdapter.getType() === 'postgresql') {
       db.exec("CREATE TABLE IF NOT EXISTS logisticians (id SERIAL PRIMARY KEY, name TEXT NOT NULL, phone TEXT DEFAULT '', created_at TEXT DEFAULT '')");
       db.exec("CREATE TABLE IF NOT EXISTS booking_events (id SERIAL PRIMARY KEY, slot_id INTEGER DEFAULT 0, created_at TEXT DEFAULT '')");
-      ['directions', 'map_scheme', 'route_moscow'].forEach(function(c) {
+      // address покрывает старые PG-базы, мигрированные до появления колонки —
+      // именно её отсутствие ломало публичный список складов («Нет складов»).
+      ['address', 'directions', 'map_scheme', 'route_moscow'].forEach(function(c) {
         try { db.exec("ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS " + c + " TEXT DEFAULT ''"); } catch (e) {}
       });
+      try { db.exec("ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS is_default INTEGER DEFAULT 0"); } catch (e) {}
     } else {
       // SQLite: обычно уже создано в initDatabase(); повтор безопасен и
       // страхует базы, открытые в обход initDatabase.
@@ -897,24 +900,40 @@ function logCheck(accounts, url, success, status, body, error, reqBody) {
 }
 
 app.get('/api/warehouses', (req, res) => {
-  const list = db.prepare('SELECT id, name, address, is_default FROM warehouses ORDER BY is_default DESC, name').all();
-  res.json({ warehouses: list });
+  // SELECT * , а не явный список колонок: на старых базах (PostgreSQL,
+  // мигрированный до появления колонки address) явный SELECT с address
+  // падал и страница показывала «Нет складов». Поля берём из строки безопасно.
+  try {
+    const rows = db.prepare('SELECT * FROM warehouses ORDER BY is_default DESC, name').all();
+    const list = rows.map(function (w) {
+      return { id: w.id, name: w.name, address: w.address || '', is_default: w.is_default };
+    });
+    res.json({ warehouses: list });
+  } catch (err) {
+    console.error('Public warehouses error:', err);
+    res.status(500).json({ error: 'Ошибка загрузки складов' });
+  }
 });
 
 // Как доехать до склада: показывается клиенту в окне «Вы записаны!».
 // Схема-картинка может быть тяжёлой, поэтому отдаётся отдельным запросом,
 // а не в общем списке складов.
 app.get('/api/warehouses/:id/directions', (req, res) => {
-  const wh = db.prepare('SELECT id, name, address, directions, map_scheme, route_moscow FROM warehouses WHERE id = ?').get(req.params.id);
-  if (!wh) return res.status(404).json({ error: 'Warehouse not found' });
-  res.json({
-    id: wh.id,
-    name: wh.name,
-    address: wh.address || '',
-    directions: wh.directions || '',
-    mapScheme: wh.map_scheme || '',
-    routeMoscow: wh.route_moscow || ''
-  });
+  try {
+    const wh = db.prepare('SELECT * FROM warehouses WHERE id = ?').get(req.params.id);
+    if (!wh) return res.status(404).json({ error: 'Warehouse not found' });
+    res.json({
+      id: wh.id,
+      name: wh.name,
+      address: wh.address || '',
+      directions: wh.directions || '',
+      mapScheme: wh.map_scheme || '',
+      routeMoscow: wh.route_moscow || ''
+    });
+  } catch (err) {
+    console.error('Warehouse directions error:', err);
+    res.status(500).json({ error: 'Ошибка загрузки данных склада' });
+  }
 });
 
 function worksOnWeekends() {
@@ -3826,7 +3845,10 @@ app.get('/api/ext/v1/ping', requireExtApi, (req, res) => {
 });
 
 app.get('/api/ext/v1/warehouses', requireExtApi, (req, res) => {
-  const list = db.prepare('SELECT id, name, address, is_default, directions, route_moscow FROM warehouses ORDER BY is_default DESC, name').all();
+  const rows = db.prepare('SELECT * FROM warehouses ORDER BY is_default DESC, name').all();
+  const list = rows.map(function (w) {
+    return { id: w.id, name: w.name, address: w.address || '', is_default: w.is_default, directions: w.directions || '', route_moscow: w.route_moscow || '' };
+  });
   res.json({ warehouses: list });
 });
 
