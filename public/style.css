@@ -585,3 +585,169 @@ body.vk-page:not(.theme-hitech) .vk-radio.vk-radio-sm.active { padding: 10px 13p
 .vk-radio.vk-radio-sm .vk-radio-body { gap: 3px; }
 .vk-radio.vk-radio-sm .t { font-size: 0.82rem; letter-spacing: 0.04em; }
 .vk-radio.vk-radio-sm .s { font-size: 0.7rem; letter-spacing: 0.06em; }
+
+/* ==========================================================================
+   Финальная сверка с эталоном vodokomfort-portal (поздний слой стилей).
+   Точные значения из src/styles.css эталона: ячейки, радио, кнопки, легенда,
+   подписи, бейдж, карточка, поля форм и модальные окна страницы записи.
+   ========================================================================== */
+
+/* Карточка страницы — как .card эталона */
+body.vk-page:not(.theme-hitech) .vk-body {
+  border: 1px solid #dfe6ee; border-radius: 12px; box-shadow: none;
+}
+
+/* Подписи-капсы — label эталона: 12px, .055em */
+body.vk-page .vk-label {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.055em;
+  text-transform: uppercase; color: #18202a; margin-bottom: 8px;
+}
+body.vk-page .vk-sub { font-size: 13px; color: #697586; margin-top: 0; }
+
+/* Бейдж длительности — .duration-note эталона */
+body.vk-page .vk-badge {
+  padding: 5px 9px; border-radius: 5px; background: #eaf2fb; color: #0d4d8f;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+}
+
+/* Радио-карточки — .radio-option эталона: тонкая рамка, точка 16px */
+body.vk-page:not(.theme-hitech) .vk-radio {
+  border: 1px solid #d6e0eb; border-radius: 9px; padding: 15px 16px; gap: 12px;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+body.vk-page:not(.theme-hitech) .vk-radio:hover,
+body.vk-page:not(.theme-hitech) .vk-radio.active {
+  border: 1px solid #0d4d8f; background: #eaf2fb; padding: 15px 16px;
+}
+body.vk-page:not(.theme-hitech) .vk-radio.vk-radio-sm,
+body.vk-page:not(.theme-hitech) .vk-radio.vk-radio-sm.active { padding: 12px 14px; }
+body.vk-page .vk-dot,
+body.vk-page .vk-radio.vk-radio-sm .vk-dot {
+  width: 16px; height: 16px; margin-top: 2px;
+  border: 1px solid #9aacbf; background: #fff;
+}
+body.vk-page .vk-radio.active .vk-dot,
+body.vk-page .vk-radio.vk-radio-sm.active .vk-dot { border: 5px solid #0d4d8f; }
+body.vk-page .vk-radio.active .vk-dot::after,
+body.vk-page .vk-radio.vk-radio-sm.active .vk-dot::after { content: none; }
+body.vk-page .vk-radio-body .t { font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em; color: #18202a; }
+body.vk-page .vk-radio-body .s { font-size: 11px; letter-spacing: 0.05em; color: #697586; }
+body.vk-page .vk-radio.vk-radio-sm .t { font-size: 12px; }
+body.vk-page .vk-radio.vk-radio-sm .s { font-size: 10.5px; }
+
+/* Поле даты — как .input эталона */
+body.vk-page .vk-date {
+  padding: 12px 16px; border: 1px solid #d8e0ea; border-radius: 8px;
+  font-size: 14px; letter-spacing: 0.1em; color: #18202a;
+}
+body.vk-page .vk-date:focus { border-color: #0d4d8f; box-shadow: 0 0 0 3px rgba(13,77,143,0.1); }
+
+/* Ячейки времени — .time-slot эталона (поздний слой) */
+body.vk-page:not(.theme-hitech) .slots-grid { gap: 8px; margin-bottom: 4px; }
+body.vk-page:not(.theme-hitech) .slot {
+  min-height: 67px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px;
+  padding: 12px 8px; border: 1px solid #cbd7e4; border-radius: 8px; background: #fff;
+  transition: all 150ms ease;
+}
+body.vk-page:not(.theme-hitech) .slot .time { font-size: 13px; font-weight: 600; color: #18202a; margin: 0; letter-spacing: 0; }
+body.vk-page:not(.theme-hitech) .slot .label { font-size: 10px; font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase; color: #697586; }
+body.vk-page:not(.theme-hitech) .slot.free { border-color: #9bb9d7; background: #f4f8fc; }
+body.vk-page:not(.theme-hitech) .slot.free .label { color: #0d4d8f; }
+body.vk-page:not(.theme-hitech) .slot.free:hover { border-color: #0d4d8f; box-shadow: none; transform: none; }
+body.vk-page:not(.theme-hitech) .slot.booked { border-color: #e1e5ea; background: #fafbfc; }
+body.vk-page:not(.theme-hitech) .slot.booked .time { color: #a4adb8; }
+body.vk-page:not(.theme-hitech) .slot.booked .label { color: #a4adb8; }
+body.vk-page:not(.theme-hitech) .slot.past { border-color: #e6e9ed; background: #fafafa; opacity: 0.6; cursor: default; }
+body.vk-page:not(.theme-hitech) .slot.past .time { color: #a4adb8; }
+body.vk-page:not(.theme-hitech) .slot.past .label { color: #a4adb8; }
+/* Статусы вне эталона — в его же смягчённой манере */
+body.vk-page:not(.theme-hitech) .slot.mine { border-color: #7fc79b; background: #f2faf5; opacity: 1; }
+body.vk-page:not(.theme-hitech) .slot.mine .time { color: #18202a; }
+body.vk-page:not(.theme-hitech) .slot.mine .label { color: #1f7a46; }
+body.vk-page:not(.theme-hitech) .slot.confirmed { border-color: #a9d4bc; background: #f2faf5; }
+body.vk-page:not(.theme-hitech) .slot.confirmed .label { color: #2f855a; }
+body.vk-page:not(.theme-hitech) .slot.in-progress { border-color: #cfc3e8; background: #faf8fe; }
+body.vk-page:not(.theme-hitech) .slot.in-progress .label { color: #6b46c1; }
+body.vk-page:not(.theme-hitech) .slot.assembling { border-color: #e8d9ad; background: #fdfaf0; }
+body.vk-page:not(.theme-hitech) .slot.assembling .label { color: #b7791f; }
+
+/* Легенда — .legend эталона */
+body.vk-page .vk-legend { gap: 24px; padding: 16px 0; border-top: 1px solid #e7edf3; margin-top: 12px; font-size: 12px; color: #697586; }
+body.vk-page .vk-legend span { gap: 6px; }
+body.vk-page .vk-legend .l { width: 10px; height: 10px; border-radius: 2px; }
+body.vk-page .vk-legend .l.free { background: #0d4d8f; }
+body.vk-page .vk-legend .l.busy { background: #adb6c1; }
+body.vk-page .vk-legend .l.na { background: #dce2e8; }
+
+/* Кнопки на странице записи (включая модальные окна) — .btn эталона */
+body.vk-page:not(.theme-hitech) .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 42px; padding: 12px 24px; border-radius: 8px; border: none;
+  font-size: 12px !important; font-weight: 600; font-family: inherit;
+  letter-spacing: 0.025em; text-transform: uppercase;
+  cursor: pointer; transition: all 150ms ease;
+}
+body.vk-page:not(.theme-hitech) .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+body.vk-page:not(.theme-hitech) .btn-primary { background: #0d4d8f; color: #fff; }
+body.vk-page:not(.theme-hitech) .btn-primary:hover:not(:disabled) { background: #08376c; }
+body.vk-page:not(.theme-hitech) .btn-secondary {
+  background: #fff; color: #0d4d8f; border: 1px solid #9db2c9;
+}
+body.vk-page:not(.theme-hitech) .btn-secondary:hover:not(:disabled) {
+  background: #fff; color: #08376c; border-color: #0d4d8f;
+}
+body.vk-page:not(.theme-hitech) .btn-sm { min-height: 32px; padding: 6px 14px; font-size: 11px !important; }
+
+/* Модальные окна страницы записи — карточки эталона */
+body.vk-page:not(.theme-hitech) .modal {
+  border: 1px solid #dfe6ee; border-radius: 12px; box-shadow: 0 18px 50px rgba(13,45,84,0.18);
+}
+body.vk-page:not(.theme-hitech) .modal h2 {
+  font-size: 20px; font-weight: 700; color: #18202a; letter-spacing: -0.3px;
+}
+body.vk-page:not(.theme-hitech) .modal label {
+  font-size: 12px !important; font-weight: 600; letter-spacing: 0.055em;
+  text-transform: uppercase; color: #18202a;
+}
+body.vk-page:not(.theme-hitech) .modal input,
+body.vk-page:not(.theme-hitech) .modal select,
+body.vk-page:not(.theme-hitech) .modal textarea {
+  padding: 12px 16px !important; border: 1px solid #d8e0ea !important; border-radius: 8px !important;
+  font-size: 14px !important; color: #18202a; background: #fff;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+body.vk-page:not(.theme-hitech) .modal input:focus,
+body.vk-page:not(.theme-hitech) .modal select:focus,
+body.vk-page:not(.theme-hitech) .modal textarea:focus {
+  outline: none; border-color: #0d4d8f !important; box-shadow: 0 0 0 3px rgba(13,77,143,0.1);
+}
+body.vk-page:not(.theme-hitech) .modal .info {
+  background: #f7f9fc !important; border: 1px solid #e8edf3 !important;
+  border-radius: 8px; color: #18202a !important; font-size: 13px;
+}
+/* согласие ПД — обычный текст, не капс */
+body.vk-page:not(.theme-hitech) .modal #consentCheck + span,
+body.vk-page:not(.theme-hitech) .modal label[style*="flex-start"] {
+  text-transform: none !important; letter-spacing: 0 !important; font-weight: 400 !important;
+  font-size: 13px !important;
+}
+body.vk-page:not(.theme-hitech) .modal a { color: #0d4d8f; }
+body.vk-page:not(.theme-hitech) .success-msg { background: #f2faf5; border-color: #a9d4bc; border-radius: 10px; }
+body.vk-page:not(.theme-hitech) .success-msg h2 { color: #1f7a46; }
+
+/* Баннер сообщения — в мягких фирменных тонах */
+body.vk-page #bookingMessageBanner {
+  background: #eaf2fb !important; border: 1px solid #c4d9ef !important;
+  border-left: 4px solid #0d4d8f !important; color: #08376c !important; border-radius: 8px !important;
+}
+body.vk-page .vk-alt-link a { color: #0d4d8f; }
+
+@media (max-width: 1000px) {
+  body.vk-page:not(.theme-hitech) .slots-grid { grid-template-columns: repeat(4, 1fr); gap: 8px; }
+}
+
+/* --- Reference palette for emphasis elements on the vk page --- */
+body.vk-page:not(.theme-hitech) .blink-red {
+  color: #0d4d8f !important;
+}
