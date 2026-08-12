@@ -3538,9 +3538,17 @@
       container.innerHTML = '<p class="no-slots">Загрузка...</p>';
       try {
         const res = await fetch('/api/manager/warehouses', { credentials: 'include' });
-        if (res.status !== 200) return;
+        if (res.status === 401) {
+          document.getElementById('dashboardView').style.display = 'none';
+          document.getElementById('loginView').style.display = 'block';
+          return;
+        }
+        if (res.status !== 200) {
+          container.innerHTML = '<p class="no-slots">Ошибка загрузки складов (HTTP ' + res.status + '). Перезапустите приложение и обновите страницу.</p>';
+          return;
+        }
         const data = await res.json();
-        if (!data.warehouses.length) {
+        if (!data.warehouses || !data.warehouses.length) {
           container.innerHTML = '<div class="empty-state">Нет складов</div>';
           return;
         }
@@ -6084,6 +6092,9 @@
           return;
         }
       } catch (e) {}
+      // Проверка сессии не удалась — гарантированно показываем форму входа.
+      document.getElementById('dashboardView').style.display = 'none';
+      document.getElementById('loginView').style.display = 'block';
       // Restore remembered username only (password is never stored)
       localStorage.removeItem('manager_password');
       const savedUsername = localStorage.getItem('manager_username');

@@ -392,9 +392,9 @@ body.vk-page .subtitle { margin-bottom: 8px; }
 }
 .vk-controls { display: grid; grid-template-columns: 320px 1fr 1fr; gap: 34px; margin-bottom: 34px; }
 .vk-date {
-  width: 100%; padding: 16px 16px; border: 1px solid #d8e0ea; border-radius: 8px;
-  font-size: 1.08rem; font-family: inherit; color: #18202a; background: #fff;
-  letter-spacing: 0.14em;
+  width: 100%; padding: 10px 12px; border: 1px solid #d8e0ea; border-radius: 8px;
+  font-size: 0.95rem; font-family: inherit; color: #18202a; background: #fff;
+  letter-spacing: 0.08em;
 }
 .vk-date:focus { outline: none; border-color: #0d4d8f; box-shadow: 0 0 0 3px rgba(29,78,158,0.12); }
 
@@ -575,3 +575,13 @@ body.theme-hitech .vk-logo-text { color: #7df9ff; }
 /* Заголовок страницы — Oswald medium, как в референсе */
 .vk-title { font-weight: 300; font-size: clamp(28px, 3.8vw, 46px); letter-spacing: -0.04em; line-height: 1.05; }
 @media (max-width: 1000px) { .vk-title { font-size: 1.9rem; } }
+
+
+/* Компактные радио-карточки (тип заказа) — как в референсе, мельче складов */
+body.vk-page:not(.theme-hitech) .vk-radio.vk-radio-sm { padding: 11px 14px; gap: 11px; }
+body.vk-page:not(.theme-hitech) .vk-radio.vk-radio-sm.active { padding: 10px 13px; }
+.vk-radio.vk-radio-sm .vk-dot { width: 20px; height: 20px; }
+.vk-radio.vk-radio-sm.active .vk-dot::after { inset: 3px; }
+.vk-radio.vk-radio-sm .vk-radio-body { gap: 3px; }
+.vk-radio.vk-radio-sm .t { font-size: 0.82rem; letter-spacing: 0.04em; }
+.vk-radio.vk-radio-sm .s { font-size: 0.7rem; letter-spacing: 0.06em; }
