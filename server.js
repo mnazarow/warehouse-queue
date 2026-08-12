@@ -144,7 +144,7 @@ if (dbTypeRow && dbTypeRow.value === 'postgresql') {
   };
   try {
     // Test PG connection before switching
-    var testChild = require('child_process').execFileSync('psql', ['-h', pgConf.host, '-p', String(pgConf.port), '-U', pgConf.user, '-d', pgConf.database, '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=pgConf.password||'';return e;})(Object.assign({},process.env)), timeout: 5000, encoding: 'utf8' });
+    var testChild = require('child_process').execFileSync('psql', ['-h', pgConf.host, '-p', String(pgConf.port), '-U', pgConf.user, '-d', pgConf.database, '-w', '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=pgConf.password||'';return e;})(Object.assign({},process.env)), timeout: 5000, encoding: 'utf8' });
     dbAdapter.setPg(pgConf);
     console.log('Switched to PostgreSQL backend');
   } catch (e) {
@@ -4224,7 +4224,8 @@ function psqlEnv(config) {
 }
 
 function psqlArgs(config) {
-  return ['-h', config.host, '-p', String(config.port), '-U', config.user, '-d', config.database, '-q'];
+  // -w: не запрашивать пароль интерактивно (иначе psql зависает на запросе).
+  return ['-h', config.host, '-p', String(config.port), '-U', config.user, '-d', config.database, '-w', '-q'];
 }
 
 function psqlExec(config, sql, cb) {
@@ -4398,7 +4399,7 @@ app.post('/api/manager/switch/to-pgsql', requireManager, function(req, res) {
   var config = getPgSqlConfig();
   var testChild;
   try {
-    testChild = require('child_process').execFileSync('psql', ['-h', config.host, '-p', String(config.port), '-U', config.user, '-d', config.database, '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=config.password||'';return e;})(Object.assign({},process.env)), timeout: 10000, encoding: 'utf8' });
+    testChild = require('child_process').execFileSync('psql', ['-h', config.host, '-p', String(config.port), '-U', config.user, '-d', config.database, '-w', '-A', '-t', '-q', '-c', 'SELECT 1'], { env: (function(e){e.PGPASSWORD=config.password||'';return e;})(Object.assign({},process.env)), timeout: 10000, encoding: 'utf8' });
   } catch (e) {
     var msg = (e.stderr || e.message || '').trim().split('\n')[0] || 'Connection failed';
     return res.json({ success: false, error: 'PostgreSQL недоступен: ' + msg });

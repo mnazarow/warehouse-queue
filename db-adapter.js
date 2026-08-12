@@ -49,7 +49,9 @@ function getType() {
 //   tuplesOnly = false -> command tag is printed (used for INSERT/UPDATE/DELETE)
 function runPsql(translatedSql, tuplesOnly) {
   if (!pgConfig) throw new Error('PostgreSQL backend is not configured');
-  var args = ['-h', pgConfig.host, '-p', String(pgConfig.port), '-U', pgConfig.user, '-d', pgConfig.database, '-A', '-X', '-v', 'ON_ERROR_STOP=1'];
+  // -w: никогда не запрашивать пароль интерактивно. Иначе при неверном/пустом
+  // PGPASSWORD psql зависает на запросе «Password for user…», блокируя запрос.
+  var args = ['-h', pgConfig.host, '-p', String(pgConfig.port), '-U', pgConfig.user, '-d', pgConfig.database, '-w', '-A', '-X', '-v', 'ON_ERROR_STOP=1'];
   if (tuplesOnly) args.push('-t', '-q');
   var env = Object.assign({}, process.env, { PGPASSWORD: pgConfig.password || '' });
   var body = translatedSql.trim();
