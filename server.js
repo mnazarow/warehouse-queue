@@ -75,6 +75,19 @@ function bookingMinMs() {
   return bookingMinMinutes() * 60000;
 }
 
+// Обязательность полей «Класс машины» и «Вид загрузки» при записи
+// (настройки require_vehicle_class / require_load_type, по умолчанию обязательны).
+function requiredBookingFields() {
+  let vehicleClass = true, loadType = true;
+  try {
+    const r1 = db.prepare("SELECT value FROM settings WHERE key = 'require_vehicle_class'").get();
+    if (r1 && r1.value !== '' && r1.value !== null) vehicleClass = r1.value !== '0';
+    const r2 = db.prepare("SELECT value FROM settings WHERE key = 'require_load_type'").get();
+    if (r2 && r2.value !== '' && r2.value !== null) loadType = r2.value !== '0';
+  } catch (e) {}
+  return { vehicleClass, loadType };
+}
+
 // Behind a reverse proxy (nginx) trust X-Forwarded-* so req.ip is the real
 // client address (used by the allowed-IP checks). Configurable via TRUST_PROXY.
 if (process.env.TRUST_PROXY) {
@@ -995,6 +1008,11 @@ app.get('/api/public/settings/allow-booking-without-account', (req, res) => {
   res.json({ allow: setting ? setting.value !== '0' : true });
 });
 
+// Какие поля записи обязательны (для показа звёздочек и проверки на клиенте)
+app.get('/api/public/settings/required-fields', (req, res) => {
+  res.json(requiredBookingFields());
+});
+
 app.get('/api/public/vehicle-classes', (req, res) => {
   const classes = db.prepare('SELECT id, name, description FROM vehicle_classes ORDER BY name').all();
   res.json({ classes });
@@ -1016,10 +1034,11 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   // Normalize once so blacklist checks and storage use the same value.
   const name = String(nameRaw).trim();
   const phone = String(phoneRaw).trim();
-  if (!vehicleClassId) {
+  const reqFields = requiredBookingFields();
+  if (reqFields.vehicleClass && !vehicleClassId) {
     return res.status(400).json({ error: 'Выберите класс машины' });
   }
-  if (!loadTypeId) {
+  if (reqFields.loadType && !loadTypeId) {
     return res.status(400).json({ error: 'Выберите вид загрузки' });
   }
   const bannedPhone = db.prepare('SELECT id FROM banned_phones WHERE phone = ?').get(phone.trim());
@@ -1179,7 +1198,7 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   // concurrent request can flip is_booked 0 -> 1.
   const bookInfo = db.prepare(
     "UPDATE slots SET is_booked = 1, customer_name = ?, customer_phone = ?, customer_account = ?, customer_comment = ?, customer_organization = ?, booked_at = datetime('now'), customer_ip = ?, customer_user_agent = ?, vehicle_class_id = ?, load_type_id = ? WHERE id = ? AND is_booked = 0"
-  ).run(name, phone, account || null, comment || null, organization || null, getIp(req), getUserAgent(req), vehicleClassId, loadTypeId, id);
+  ).run(name, phone, account || null, comment || null, organization || null, getIp(req), getUserAgent(req), vehicleClassId || null, loadTypeId || null, id);
   if (!bookInfo || bookInfo.changes === 0) {
     return res.status(409).json({ error: 'Slot already booked' });
   }
@@ -1630,6 +1649,22 @@ app.post('/api/manager/settings/booking-min-minutes', requireManager, (req, res)
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('booking_min_minutes', ?)").run(String(n));
   redisFlushSlotsCache();
   res.json({ success: true });
+});
+
+// Обязательность полей «Класс машины» и «Вид загрузки» при записи
+app.get('/api/manager/settings/required-fields', requireManager, (req, res) => {
+  res.json(requiredBookingFields());
+});
+
+app.post('/api/manager/settings/required-fields', requireManager, (req, res) => {
+  const { vehicleClass, loadType } = req.body || {};
+  if (vehicleClass !== undefined) {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('require_vehicle_class', ?)").run(vehicleClass ? '1' : '0');
+  }
+  if (loadType !== undefined) {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('require_load_type', ?)").run(loadType ? '1' : '0');
+  }
+  res.json({ success: true, ...requiredBookingFields() });
 });
 
 app.post('/api/manager/settings/1c/order-validation-url', requireManager, (req, res) => {
@@ -3890,8 +3925,12 @@ app.post('/api/ext/v1/bookings', requireExtApi, async (req, res) => {
     if (!slotId || !nameRaw || !phoneRaw) {
       return res.status(400).json({ error: 'Обязательные поля: slotId, name, phone' });
     }
-    if (!vehicleClassId || !loadTypeId) {
-      return res.status(400).json({ error: 'Обязательные поля: vehicleClassId, loadTypeId' });
+    const reqFields = requiredBookingFields();
+    if (reqFields.vehicleClass && !vehicleClassId) {
+      return res.status(400).json({ error: 'Обязательное поле: vehicleClassId' });
+    }
+    if (reqFields.loadType && !loadTypeId) {
+      return res.status(400).json({ error: 'Обязательное поле: loadTypeId' });
     }
     const name = String(nameRaw).trim();
     const phone = String(phoneRaw).trim();
@@ -3965,7 +4004,7 @@ app.post('/api/ext/v1/bookings', requireExtApi, async (req, res) => {
 
     const bookInfo = db.prepare(
       "UPDATE slots SET is_booked = 1, customer_name = ?, customer_phone = ?, customer_account = ?, customer_comment = ?, customer_organization = ?, booked_at = datetime('now'), customer_ip = ?, customer_user_agent = ?, vehicle_class_id = ?, load_type_id = ? WHERE id = ? AND is_booked = 0"
-    ).run(name, phone, accounts.join('\n') || null, comment || null, organization || null, getIp(req), 'ext-api', vehicleClassId, loadTypeId, slotId);
+    ).run(name, phone, accounts.join('\n') || null, comment || null, organization || null, getIp(req), 'ext-api', vehicleClassId || null, loadTypeId || null, slotId);
     if (!bookInfo || bookInfo.changes === 0) {
       return res.status(409).json({ error: 'Слот уже занят' });
     }

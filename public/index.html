@@ -215,13 +215,13 @@
         <textarea id="customerComment" rows="3" placeholder="Дополнительная информация к заказу" style="width:100%;padding:10px 12px;border:2px solid #e2e8f0;border-radius:6px;font-size:1rem;font-family:inherit;resize:vertical"></textarea>
       </div>
       <div class="form-group">
-        <label for="vehicleClassSelect">Класс машины <span style="color:#e53e3e">*</span></label>
+        <label for="vehicleClassSelect">Класс машины <span id="vehicleClassReq" style="color:#e53e3e">*</span></label>
         <select id="vehicleClassSelect" style="width:100%;padding:10px 12px;border:2px solid #e2e8f0;border-radius:6px;font-size:1rem;font-family:inherit;background:#fff">
           <option value="">— Выберите —</option>
         </select>
       </div>
       <div class="form-group">
-        <label for="loadTypeSelect">Вид загрузки <span style="color:#e53e3e">*</span></label>
+        <label for="loadTypeSelect">Вид загрузки <span id="loadTypeReq" style="color:#e53e3e">*</span></label>
         <select id="loadTypeSelect" style="width:100%;padding:10px 12px;border:2px solid #e2e8f0;border-radius:6px;font-size:1rem;font-family:inherit;background:#fff">
           <option value="">— Выберите —</option>
         </select>
@@ -315,6 +315,20 @@
         const data = await res.json();
         allowNoAccount = data.allow;
         updateAccountRequiredLabel();
+      } catch {}
+    }
+
+    let requiredFields = { vehicleClass: true, loadType: true };
+    async function loadRequiredFields() {
+      try {
+        const res = await fetch('/api/public/settings/required-fields');
+        if (!res.ok) return; // старый сервер — поля считаются обязательными
+        const data = await res.json();
+        requiredFields = { vehicleClass: data.vehicleClass !== false, loadType: data.loadType !== false };
+        const vcReq = document.getElementById('vehicleClassReq');
+        const ltReq = document.getElementById('loadTypeReq');
+        if (vcReq) vcReq.style.display = requiredFields.vehicleClass ? '' : 'none';
+        if (ltReq) ltReq.style.display = requiredFields.loadType ? '' : 'none';
       } catch {}
     }
 
@@ -666,11 +680,11 @@
       }
       const vehicleClassId = document.getElementById('vehicleClassSelect').value;
       const loadTypeId = document.getElementById('loadTypeSelect').value;
-      if (!vehicleClassId) {
+      if (requiredFields.vehicleClass && !vehicleClassId) {
         alert('Выберите класс машины');
         return;
       }
-      if (!loadTypeId) {
+      if (requiredFields.loadType && !loadTypeId) {
         alert('Выберите вид загрузки');
         return;
       }
@@ -686,7 +700,7 @@
           return;
         }
         if (bookBtn) bookBtn.disabled = true;
-        const body = { name, phone, organization: organization || undefined, account: accounts.join('\n'), comment, captchaAnswer: Number(captchaAnswer), vehicleClassId: Number(vehicleClassId), loadTypeId: Number(loadTypeId) };
+        const body = { name, phone, organization: organization || undefined, account: accounts.join('\n'), comment, captchaAnswer: Number(captchaAnswer), vehicleClassId: vehicleClassId ? Number(vehicleClassId) : undefined, loadTypeId: loadTypeId ? Number(loadTypeId) : undefined };
         if (bookingForce) body.force = true;
         const bookedSlotId = selectedSlotId;
         // Если указаны счета — сервер во время этого запроса обращается к 1С.
@@ -817,6 +831,7 @@
     updateDurationBadge();
     loadWarehouses();
     loadAllowNoAccount();
+    loadRequiredFields();
     loadBookingMessage();
     // Автообновление не должно перерисовывать сетку, пока открыто окно записи
     // или идёт проверка в 1С — иначе выбранный слот «выдёргивается» из-под пользователя.

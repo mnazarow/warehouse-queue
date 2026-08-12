@@ -516,10 +516,10 @@
         clearError('fgLoadType');
         clearError('fgCaptcha');
         clearError('fgConsent');
-        if (!$('vehicleClassSelect').value) {
+        if (requiredFields.vehicleClass && !$('vehicleClassSelect').value) {
           fail('fgVehicle', 'errVehicle', 'Выберите класс машины', 'vehicleClassSelect');
         }
-        if (!$('loadTypeSelect').value) {
+        if (requiredFields.loadType && !$('loadTypeSelect').value) {
           fail('fgLoadType', 'errLoadType', 'Выберите вид загрузки', 'loadTypeSelect');
         }
         if (!$('captchaAnswer').value.trim()) {
@@ -613,6 +613,20 @@
       $('accountLabel').innerHTML = allowNoAccount
         ? 'Номера счетов (до 10, каждый с новой строки)'
         : 'Номера счетов (до 10, каждый с новой строки) <span class="req">*</span>';
+    }
+
+    let requiredFields = { vehicleClass: true, loadType: true };
+    async function loadRequiredFields() {
+      try {
+        const res = await fetch('/api/public/settings/required-fields');
+        if (!res.ok) return; // старый сервер — поля считаются обязательными
+        const data = await res.json();
+        requiredFields = { vehicleClass: data.vehicleClass !== false, loadType: data.loadType !== false };
+        const vcReq = document.querySelector('label[for="vehicleClassSelect"] .req');
+        const ltReq = document.querySelector('label[for="loadTypeSelect"] .req');
+        if (vcReq) vcReq.style.display = requiredFields.vehicleClass ? '' : 'none';
+        if (ltReq) ltReq.style.display = requiredFields.loadType ? '' : 'none';
+      } catch (e) {}
     }
 
     function fillSelect(sel, items) {
@@ -749,8 +763,8 @@
         account: accounts.join('\n'),
         comment: $('customerComment').value.trim(),
         captchaAnswer: Number($('captchaAnswer').value.trim()),
-        vehicleClassId: Number($('vehicleClassSelect').value),
-        loadTypeId: Number($('loadTypeSelect').value)
+        vehicleClassId: $('vehicleClassSelect').value ? Number($('vehicleClassSelect').value) : undefined,
+        loadTypeId: $('loadTypeSelect').value ? Number($('loadTypeSelect').value) : undefined
       };
       if (bookingForce) body.force = true;
 
@@ -879,6 +893,7 @@
     initDate();
     loadWarehouses();
     loadAllowNoAccount();
+    loadRequiredFields();
     loadBookingMessage();
     initCookieBanner();
     try { fetch('/api/visit', { method: 'POST' }).catch(function () {}); } catch (e) {}

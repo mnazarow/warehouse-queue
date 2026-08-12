@@ -865,6 +865,26 @@
         </div>
 
         <div class="section-header" style="margin-top:24px">
+          <h2>Обязательные поля записи</h2>
+        </div>
+        <div style="max-width:760px;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:20px">
+          <div class="form-group" style="margin-bottom:12px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
+              <input type="checkbox" id="requireVehicleClass" style="width:18px;height:18px;cursor:pointer" onchange="saveRequiredFields()">
+              <span>Поле «Класс машины» обязательно для заполнения</span>
+            </label>
+          </div>
+          <div class="form-group" style="margin-bottom:12px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
+              <input type="checkbox" id="requireLoadType" style="width:18px;height:18px;cursor:pointer" onchange="saveRequiredFields()">
+              <span>Поле «Вид загрузки» обязательно для заполнения</span>
+            </label>
+          </div>
+          <div style="font-size:0.8rem;color:#718096">Действует на страницу записи, запись в три шага и внешнее API. Если галочка снята, клиент может оформить запись, не выбирая значение.</div>
+          <div id="requiredFieldsStatus" style="color:#38a169;margin-top:8px;display:none;font-size:0.85rem"></div>
+        </div>
+
+        <div class="section-header" style="margin-top:24px">
           <h2>Внешнее API</h2>
         </div>
         <div style="max-width:760px;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:20px">
@@ -893,7 +913,7 @@
               <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/warehouses</code></td><td style="padding:4px 8px">Склады (с адресом и описанием проезда)</td></tr>
               <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/vehicle-classes</code>, <code>/load-types</code></td><td style="padding:4px 8px">Справочники для полей записи</td></tr>
               <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/slots?date=&type=&warehouse_id=</code></td><td style="padding:4px 8px">Окна на дату (type: small | bulk)</td></tr>
-              <tr><td style="padding:4px 8px"><code>POST /api/ext/v1/bookings</code></td><td style="padding:4px 8px">Оформить запись: slotId, name, phone, vehicleClassId, loadTypeId, account?, organization?, comment?, force?</td></tr>
+              <tr><td style="padding:4px 8px"><code>POST /api/ext/v1/bookings</code></td><td style="padding:4px 8px">Оформить запись: slotId, name, phone, vehicleClassId*, loadTypeId*, account?, organization?, comment?, force? (* — если поле включено в «Обязательных полях записи»)</td></tr>
               <tr><td style="padding:4px 8px"><code>GET /api/ext/v1/bookings/:slotId</code></td><td style="padding:4px 8px">Данные записи и её статус</td></tr>
               <tr><td style="padding:4px 8px"><code>DELETE /api/ext/v1/bookings/:slotId</code></td><td style="padding:4px 8px">Отменить запись (те же запреты, что у клиента)</td></tr>
             </table>
@@ -2738,7 +2758,41 @@
           document.getElementById('extApiEnabled').checked = !!extData.enabled;
           document.getElementById('extApiKey').value = extData.key || '';
         }
+
+        const rfRes = await fetch('/api/manager/settings/required-fields', { credentials: 'include' });
+        if (rfRes.ok) {
+          const rfData = await rfRes.json();
+          document.getElementById('requireVehicleClass').checked = rfData.vehicleClass !== false;
+          document.getElementById('requireLoadType').checked = rfData.loadType !== false;
+        }
       } catch {}
+    }
+
+    async function saveRequiredFields() {
+      const vehicleClass = document.getElementById('requireVehicleClass').checked;
+      const loadType = document.getElementById('requireLoadType').checked;
+      const status = document.getElementById('requiredFieldsStatus');
+      try {
+        const res = await fetch('/api/manager/settings/required-fields', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ vehicleClass, loadType })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          status.textContent = 'Сохранено';
+          status.style.color = '#38a169';
+        } else {
+          status.textContent = data.error || (res.status === 404 ? 'Сервер не обновлён — перезапустите приложение' : 'Ошибка сохранения');
+          status.style.color = '#e53e3e';
+        }
+      } catch (e) {
+        status.textContent = 'Ошибка сети: ' + e.message;
+        status.style.color = '#e53e3e';
+      }
+      status.style.display = 'block';
+      setTimeout(() => status.style.display = 'none', 3000);
     }
 
     function extApiFlash(msg, isError) {
