@@ -2779,12 +2779,18 @@
           credentials: 'include',
           body: JSON.stringify({ vehicleClass, loadType })
         });
-        const data = await res.json();
-        if (res.ok && data.success) {
+        // Старый сервер отвечает HTML-страницей 404 — парсим ответ осторожно,
+        // иначе res.json() падает с ошибкой JSON parse.
+        let data = null;
+        try { data = await res.json(); } catch (e) {}
+        if (res.ok && data && data.success) {
           status.textContent = 'Сохранено';
           status.style.color = '#38a169';
         } else {
-          status.textContent = data.error || (res.status === 404 ? 'Сервер не обновлён — перезапустите приложение' : 'Ошибка сохранения');
+          status.textContent = (data && data.error) ||
+            (res.status === 404
+              ? 'На сервере старая версия приложения — обновите код и перезапустите его'
+              : 'Ошибка сохранения (HTTP ' + res.status + ')');
           status.style.color = '#e53e3e';
         }
       } catch (e) {
@@ -2792,7 +2798,7 @@
         status.style.color = '#e53e3e';
       }
       status.style.display = 'block';
-      setTimeout(() => status.style.display = 'none', 3000);
+      setTimeout(() => status.style.display = 'none', 6000);
     }
 
     function extApiFlash(msg, isError) {

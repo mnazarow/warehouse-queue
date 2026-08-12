@@ -1657,14 +1657,18 @@ app.get('/api/manager/settings/required-fields', requireManager, (req, res) => {
 });
 
 app.post('/api/manager/settings/required-fields', requireManager, (req, res) => {
-  const { vehicleClass, loadType } = req.body || {};
-  if (vehicleClass !== undefined) {
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('require_vehicle_class', ?)").run(vehicleClass ? '1' : '0');
+  try {
+    const { vehicleClass, loadType } = req.body || {};
+    if (vehicleClass !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('require_vehicle_class', ?)").run(vehicleClass ? '1' : '0');
+    }
+    if (loadType !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('require_load_type', ?)").run(loadType ? '1' : '0');
+    }
+    res.json({ success: true, ...requiredBookingFields() });
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка базы данных: ' + err.message });
   }
-  if (loadType !== undefined) {
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('require_load_type', ?)").run(loadType ? '1' : '0');
-  }
-  res.json({ success: true, ...requiredBookingFields() });
 });
 
 app.post('/api/manager/settings/1c/order-validation-url', requireManager, (req, res) => {
