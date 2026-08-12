@@ -346,32 +346,32 @@ body.theme-hitech #myBookingDirections img { border-color: #223558 !important; }
    Правила не применяются в теме Hi-Tech (:not(.theme-hitech)).
    ========================================================================== */
 body.vk-page { background: #fff; }
-body.vk-page:not(.theme-hitech) { color: #1c2a3a; }
+body.vk-page:not(.theme-hitech) { color: #18202a; }
 
-.vk-header { border-bottom: 1px solid #edf1f6; background: #fff; }
+.vk-header { border-bottom: 1px solid #eef2f6; background: #fff; }
 .vk-header-in {
-  max-width: 1320px; margin: 0 auto; padding: 18px 36px;
+  max-width: 1320px; margin: 0 auto; padding: 24px 34px;
   display: flex; align-items: center; justify-content: space-between; gap: 20px;
 }
 .vk-logo img { display: block; height: 44px; width: auto; }
 .vk-nav { display: flex; gap: 34px; }
 .vk-nav a {
-  color: #1d4e9e; text-decoration: none; font-size: 0.82rem; font-weight: 700;
+  color: #0d4d8f; text-decoration: none; font-size: 0.82rem; font-weight: 700;
   letter-spacing: 0.09em; text-transform: uppercase;
 }
-.vk-nav a:hover { color: #123c7e; }
+.vk-nav a:hover { color: #08376c; }
 
 .vk-stepper { display: flex; align-items: flex-start; justify-content: center; gap: 14px; padding: 26px 16px 6px; }
 .vk-step { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 130px; }
 .vk-step .num {
   width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 1.05rem; color: #8fa3bd; background: #fff; border: 2px solid #c9d6e6;
+  font-weight: 700; font-size: 1.05rem; color: #697586; background: #fff; border: 2px solid #d8e0ea;
 }
-.vk-step .lbl { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #8fa3bd; }
-.vk-step.active .num { background: #123c7e; border-color: #123c7e; color: #fff; }
-.vk-step.active .lbl { color: #1d4e9e; }
-.vk-step.done .num { background: #e8f0fa; border-color: #1d4e9e; color: #1d4e9e; }
-.vk-step-line { width: 120px; height: 2px; background: #c9d6e6; margin-top: 20px; }
+.vk-step .lbl { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #697586; }
+.vk-step.active .num { background: #08376c; border-color: #08376c; color: #fff; }
+.vk-step.active .lbl { color: #0d4d8f; }
+.vk-step.done .num { background: #eaf2fb; border-color: #0d4d8f; color: #0d4d8f; }
+.vk-step-line { width: 120px; height: 2px; background: #d8e0ea; margin-top: 20px; }
 
 body.vk-page:not(.theme-hitech) .vk-body {
   max-width: 1340px; margin: 10px auto 44px; padding: 42px 46px 30px;
@@ -379,57 +379,57 @@ body.vk-page:not(.theme-hitech) .vk-body {
   box-shadow: 0 6px 30px rgba(18,60,126,0.05);
 }
 .vk-title {
-  color: #2456a4; text-transform: uppercase;
+  color: #0d4d8f; text-transform: uppercase;
   margin-bottom: 6px;
 }
 body.vk-page .subtitle { margin-bottom: 8px; }
 .vk-alt-link { margin: 0 0 22px; font-size: 0.88rem; }
-.vk-alt-link a { color: #1d4e9e; }
+.vk-alt-link a { color: #0d4d8f; }
 
 .vk-label {
   font-size: 0.82rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
-  color: #1f3247; margin-bottom: 12px;
+  color: #18202a; margin-bottom: 12px;
 }
 .vk-controls { display: grid; grid-template-columns: 320px 1fr 1fr; gap: 34px; margin-bottom: 34px; }
 .vk-date {
-  width: 100%; padding: 16px 16px; border: 1px solid #c9d6e6; border-radius: 8px;
-  font-size: 1.08rem; font-family: inherit; color: #23364d; background: #fff;
+  width: 100%; padding: 16px 16px; border: 1px solid #d8e0ea; border-radius: 8px;
+  font-size: 1.08rem; font-family: inherit; color: #18202a; background: #fff;
   letter-spacing: 0.14em;
 }
-.vk-date:focus { outline: none; border-color: #1d4e9e; box-shadow: 0 0 0 3px rgba(29,78,158,0.12); }
+.vk-date:focus { outline: none; border-color: #0d4d8f; box-shadow: 0 0 0 3px rgba(29,78,158,0.12); }
 
 .vk-radio-list { display: flex; flex-direction: column; gap: 12px; }
 body.vk-page:not(.theme-hitech) .vk-radio {
   display: flex; align-items: flex-start; gap: 14px; width: 100%; text-align: left;
-  padding: 17px 18px; background: #fff; border: 1px solid #cdd9e8; border-radius: 12px;
+  padding: 17px 18px; background: #fff; border: 1px solid #d8e0ea; border-radius: 10px;
   cursor: pointer; font-family: inherit; transition: all 0.15s ease;
 }
-body.vk-page:not(.theme-hitech) .vk-radio:hover { border-color: #1d4e9e; }
+body.vk-page:not(.theme-hitech) .vk-radio:hover { border-color: #0d4d8f; }
 body.vk-page:not(.theme-hitech) .vk-radio.active {
-  background: #e8f0fa; border: 2px solid #123c7e; padding: 16px 17px;
+  background: #eaf2fb; border: 2px solid #08376c; padding: 16px 17px;
 }
 .vk-dot {
   flex-shrink: 0; width: 26px; height: 26px; margin-top: 0; border-radius: 50%;
   border: 2px solid #b6c6da; background: #fff; position: relative;
 }
-.vk-radio.active .vk-dot { border-color: #123c7e; }
+.vk-radio.active .vk-dot { border-color: #08376c; }
 .vk-radio.active .vk-dot::after {
-  content: ''; position: absolute; inset: 4px; border-radius: 50%; background: #123c7e;
+  content: ''; position: absolute; inset: 4px; border-radius: 50%; background: #08376c;
 }
 .vk-radio-body { display: flex; flex-direction: column; gap: 3px; }
 .vk-radio-body { gap: 5px; }
 .vk-radio-body .t {
-  font-size: 0.9rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #1f3247;
+  font-size: 0.9rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #18202a;
 }
 .vk-radio-body .s {
-  font-size: 0.76rem; letter-spacing: 0.08em; text-transform: uppercase; color: #9db0c7;
+  font-size: 0.76rem; letter-spacing: 0.08em; text-transform: uppercase; color: #697586;
 }
-.vk-radio.active .vk-radio-body .t { color: #123c7e; }
+.vk-radio.active .vk-radio-body .t { color: #08376c; }
 
 .vk-times-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-.vk-sub { font-size: 0.88rem; color: #9db0c7; margin-top: -2px; }
+.vk-sub { font-size: 0.88rem; color: #697586; margin-top: -2px; }
 .vk-badge {
-  background: #e3edf9; color: #2456a4; font-size: 0.8rem; font-weight: 700;
+  background: #eaf2fb; color: #0d4d8f; font-size: 0.8rem; font-weight: 700;
   letter-spacing: 0.1em; text-transform: uppercase; padding: 8px 16px; border-radius: 8px;
 }
 
@@ -438,29 +438,29 @@ body.vk-page:not(.theme-hitech) .slots-grid {
   display: grid; grid-template-columns: repeat(8, 1fr); gap: 14px;
 }
 body.vk-page:not(.theme-hitech) .slot {
-  background: #fff; border: 1px solid #dde6f0; border-radius: 10px;
+  background: #fff; border: 1px solid #e8edf3; border-radius: 10px;
   padding: 17px 8px; text-align: center; cursor: pointer; transition: all 0.12s ease;
 }
-body.vk-page:not(.theme-hitech) .slot .time { font-size: 1rem; font-weight: 600; color: #23364d; margin-bottom: 7px; letter-spacing: 0.01em; }
+body.vk-page:not(.theme-hitech) .slot .time { font-size: 1rem; font-weight: 600; color: #18202a; margin-bottom: 7px; letter-spacing: 0.01em; }
 body.vk-page:not(.theme-hitech) .slot .label {
-  font-size: 0.68rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #9db0c7;
+  font-size: 0.68rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #697586;
 }
-body.vk-page:not(.theme-hitech) .slot.free { border-color: #a9c3e2; }
-body.vk-page:not(.theme-hitech) .slot.free .label { color: #2456a4; }
-body.vk-page:not(.theme-hitech) .slot.free:hover { border-color: #1d4e9e; box-shadow: 0 2px 10px rgba(29,78,158,0.14); transform: translateY(-1px); }
+body.vk-page:not(.theme-hitech) .slot.free { border-color: #9fc0e8; }
+body.vk-page:not(.theme-hitech) .slot.free .label { color: #0d4d8f; }
+body.vk-page:not(.theme-hitech) .slot.free:hover { border-color: #0d4d8f; box-shadow: 0 2px 10px rgba(29,78,158,0.14); transform: translateY(-1px); }
 body.vk-page:not(.theme-hitech) .slot.free.selected {
-  background: #e8f0fa; border: 2px solid #123c7e; padding: 16px 7px;
+  background: #eaf2fb; border: 2px solid #08376c; padding: 16px 7px;
 }
-body.vk-page:not(.theme-hitech) .slot.free.selected .time { color: #123c7e; }
+body.vk-page:not(.theme-hitech) .slot.free.selected .time { color: #08376c; }
 body.vk-page:not(.theme-hitech) .slot.booked {
-  background: #eef2f7; border-color: #e2e9f1;
+  background: #eef2f7; border-color: #e8edf3;
 }
-body.vk-page:not(.theme-hitech) .slot.booked .time { color: #94a5ba; }
+body.vk-page:not(.theme-hitech) .slot.booked .time { color: #697586; }
 body.vk-page:not(.theme-hitech) .slot.past {
-  background: #f6f8fb; border-color: #e9eef5; cursor: default;
+  background: #f6f8fb; border-color: #e8edf3; cursor: default;
 }
-body.vk-page:not(.theme-hitech) .slot.past .time { color: #b9c6d6; }
-body.vk-page:not(.theme-hitech) .slot.past .label { color: #c4d0de; }
+body.vk-page:not(.theme-hitech) .slot.past .time { color: #9ca3af; }
+body.vk-page:not(.theme-hitech) .slot.past .label { color: #9ca3af; }
 body.vk-page:not(.theme-hitech) .slot.mine { background: #e9f8ef; border-color: #38a169; }
 body.vk-page:not(.theme-hitech) .slot.mine .time,
 body.vk-page:not(.theme-hitech) .slot.mine .label { color: #276749; }
@@ -473,21 +473,21 @@ body.vk-page:not(.theme-hitech) .slot.assembling .label { color: #b7791f; }
 
 .vk-legend {
   display: flex; justify-content: center; gap: 26px; padding: 18px 0 6px;
-  margin-top: 18px; border-top: 1px solid #edf1f6; font-size: 0.85rem; color: #4a5b70;
+  margin-top: 18px; border-top: 1px solid #eef2f6; font-size: 0.85rem; color: #4a5b70;
 }
 .vk-legend span { display: flex; align-items: center; gap: 8px; }
 .vk-legend .l { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-.vk-legend .l.free { background: #123c7e; }
+.vk-legend .l.free { background: #08376c; }
 .vk-legend .l.busy { background: #aebccd; }
 .vk-legend .l.na { background: #e6ecf4; }
 
-.vk-actions { display: flex; justify-content: flex-end; margin-top: 16px; padding-top: 16px; border-top: 1px solid #edf1f6; }
+.vk-actions { display: flex; justify-content: flex-end; margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f6; }
 body.vk-page:not(.theme-hitech) .vk-next {
-  background: #123c7e; border: none; border-radius: 8px; color: #fff;
+  background: #08376c; border: none; border-radius: 8px; color: #fff;
   font-size: 0.85rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
   padding: 16px 26px; cursor: pointer; transition: all 0.15s ease;
 }
-body.vk-page:not(.theme-hitech) .vk-next:hover:not(:disabled) { background: #1d4e9e; }
+body.vk-page:not(.theme-hitech) .vk-next:hover:not(:disabled) { background: #0d4d8f; }
 body.vk-page:not(.theme-hitech) .vk-next:disabled {
   background: #aebccd; cursor: not-allowed; opacity: 1;
 }
@@ -556,26 +556,22 @@ body.vk-page #themeToggle { top: 96px; right: 20px; }
 }
 
 body.vk-page {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Roboto, Arial, sans-serif;
+  font-family: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
-/* Сжатый фирменный шрифт поставляется с сайтом (/fonts) — вид одинаковый
-   на всех устройствах и без интернета. */
-.vk-cond, .vk-title, .vk-logo-text {
-  font-family: 'WQ Condensed', 'Oswald', 'PT Sans Narrow', 'Arial Narrow', Arial, sans-serif;
+/* Заголовок — как в референсе: Open Sans Light, без сжатых шрифтов */
+.vk-title {
+  font-family: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
 /* Логотип: знак + словесная часть, как на референсе */
-.vk-logo { display: flex; align-items: center; gap: 18px; text-decoration: none; }
-.vk-logo-mark { display: block; height: 60px; width: auto; }
-/* Надпись, как в референсе: обычный полужирный гротеск с разрядкой */
-.vk-logo-text {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Roboto, Arial, sans-serif;
-  font-size: 1.62rem; font-weight: 650; letter-spacing: 0.13em;
-  text-transform: uppercase; color: #1e3a63; line-height: 1;
+.vk-logo { display: inline-flex; align-items: center; text-decoration: none; }
+.vk-logo-image {
+  display: block; width: min(270px, 34vw); height: auto; max-height: 44px;
+  object-fit: contain; object-position: left center;
 }
-@supports not (font-weight: 650) { .vk-logo-text { font-weight: 700; } }
 body.theme-hitech .vk-logo-text { color: #7df9ff; }
 
 /* Заголовок страницы — Oswald medium, как в референсе */
-.vk-title { font-weight: 400; font-size: 3.5rem; letter-spacing: 0.005em; line-height: 1.04; }
+.vk-title { font-weight: 300; font-size: clamp(28px, 3.8vw, 46px); letter-spacing: -0.04em; line-height: 1.05; }
 @media (max-width: 1000px) { .vk-title { font-size: 1.9rem; } }
