@@ -327,6 +327,13 @@
     clientLabel: function () {
       return this.label(this.clientOffset());
     },
+    // Подпись в карточке склада: по какому времени он работает.
+    workLabel: function (h) {
+      const n = parseInt(h, 10);
+      const off = Number.isFinite(n) ? n : this.offset;
+      return off === 3 ? 'Работает по московскому времени'
+                       : 'Работает по местному времени (' + this.label(off) + ')';
+    },
     // «09:15» по времени склада -> «07:15» по времени браузера.
     toClient: function (hhmm) {
       const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})/);

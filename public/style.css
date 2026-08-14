@@ -822,3 +822,7 @@ body.vk-page:not(.theme-hitech) .slot.free .local { color: #6b87a6; }
 body.vk-page:not(.theme-hitech) .slot.booked .local,
 body.vk-page:not(.theme-hitech) .slot.past .local { color: #b4bcc6; }
 body.theme-hitech .slot .local { color: #5f7396; }
+
+/* Часовой пояс склада в карточке выбора — под адресом */
+body.vk-page .vk-radio-body .s.vk-tz { color: #8a97a8; }
+body.vk-page .vk-radio.active .vk-radio-body .s.vk-tz { color: #4a739f; }

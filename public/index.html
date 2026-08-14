@@ -115,7 +115,7 @@
 
   <div class="container vk-body">
     <h1 class="vk-title">Онлайн-запись на склад</h1>
-    <p class="subtitle" id="workHoursNote">Выберите дату и время для визита. Работаем в будние дни с 9:00 до 17:30 по московскому времени.</p>
+    <p class="subtitle" id="workHoursNote">Выберите дату и время для визита. Работаем в будние дни с 9:00 до 17:30 по московскому времени, региональные склады работают по местному времени.</p>
     <div id="bookingMessageBanner" style="display:none;margin:0 0 16px;padding:12px 16px;background:#ebf8ff;border:1px solid #90cdf4;border-left:4px solid #3182ce;border-radius:8px;color:#2c5282;font-size:0.95rem;line-height:1.5;white-space:pre-wrap"></div>
 
     <div class="vk-controls">
@@ -390,11 +390,26 @@
             sub.textContent = w.address;
             body.appendChild(sub);
           }
+          // Часовой пояс склада — сразу после адреса, чтобы было видно,
+          // по какому времени работает именно этот склад.
+          if (w.tz_offset !== undefined && w.tz_offset !== null) {
+            card.dataset.tz = w.tz_offset;
+            const tz = document.createElement('span');
+            tz.className = 's vk-tz';
+            tz.textContent = WhTime.workLabel(w.tz_offset);
+            body.appendChild(tz);
+          }
           card.appendChild(dot);
           card.appendChild(body);
           card.addEventListener('click', () => {
             container.querySelectorAll('.wh-card').forEach(c => c.classList.remove('active'));
             card.classList.add('active');
+            // Пояс выбранного склада применяем сразу, не дожидаясь слотов.
+            if (card.dataset.tz !== undefined) {
+              WhTime.set(card.dataset.tz);
+              updateSlotsDateNote();
+              updateWorkHoursNote();
+            }
             loadSlots();
           });
           container.appendChild(card);
@@ -512,13 +527,12 @@
       el.textContent = text;
     }
 
-    // «Работаем в будние дни с 9:00 до 17:30 по московскому времени.»
-    // Для склада в другом поясе — по времени этого склада.
+    // Подпись о режиме работы. Если браузер клиента в другом поясе,
+    // добавляем пояснение про второе время рядом с интервалами.
     function updateWorkHoursNote() {
       const el = document.getElementById('workHoursNote');
       if (!el) return;
-      const byWhat = WhTime.offset === 3 ? 'по московскому времени' : 'по времени склада (' + WhTime.label() + ')';
-      let text = `Выберите дату и время для визита. Работаем в будние дни с 9:00 до 17:30 ${byWhat}.`;
+      let text = 'Выберите дату и время для визита. Работаем в будние дни с 9:00 до 17:30 по московскому времени, региональные склады работают по местному времени.';
       if (WhTime.differs()) {
         text += ` У вас сейчас ${WhTime.clientLabel()} — рядом со временем склада показано ваше время.`;
       }
