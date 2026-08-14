@@ -99,7 +99,7 @@
   <div class="container vk-body">
     <div class="page-switch"><a href="/">← Обычная форма записи (одно окно)</a></div>
     <h1 class="vk-title">Онлайн-запись на склад в три шага</h1>
-    <p class="subtitle">Выберите дату и время визита, затем заполните три коротких шага. Работаем в будние дни с 9:00 до 17:30.</p>
+    <p class="subtitle" id="workHoursNote">Выберите дату и время визита, затем заполните три коротких шага. Работаем в будние дни с 9:00 до 17:30 по московскому времени.</p>
     <div id="bookingMessageBanner" style="display:none;margin:0 0 16px;padding:12px 16px;background:#ebf8ff;border:1px solid #90cdf4;border-left:4px solid #3182ce;border-radius:8px;color:#2c5282;font-size:0.95rem;line-height:1.5;white-space:pre-wrap"></div>
 
     <div id="pickerBlock">
@@ -409,7 +409,22 @@
       const d = new Date(datePicker.value + 'T00:00:00');
       const days = ['воскресенье', 'понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу'];
       const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
-      el.textContent = `Доступные интервалы на ${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]}`;
+      let text = `Доступные интервалы на ${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]}`;
+      text += ` · время ${WhTime.offset === 3 ? 'московское' : 'склада (' + WhTime.label() + ')'}`;
+      if (WhTime.differs()) text += `, под интервалом — ваше (${WhTime.clientLabel()})`;
+      el.textContent = text;
+    }
+
+    // «Работаем в будние дни с 9:00 до 17:30 по московскому времени.»
+    function updateWorkHoursNote() {
+      const el = $('workHoursNote');
+      if (!el) return;
+      const byWhat = WhTime.offset === 3 ? 'по московскому времени' : 'по времени склада (' + WhTime.label() + ')';
+      let text = `Выберите дату и время визита, затем заполните три коротких шага. Работаем в будние дни с 9:00 до 17:30 ${byWhat}.`;
+      if (WhTime.differs()) {
+        text += ` У вас сейчас ${WhTime.clientLabel()} — рядом со временем склада показано ваше время.`;
+      }
+      el.textContent = text;
     }
 
     function updateDurationBadge() {
@@ -430,6 +445,12 @@
         if (!res.ok || !data) {
           slotsContainer.innerHTML = '<p class="no-slots">Ошибка загрузки</p>';
           return;
+        }
+        // Пояс склада приходит вместе со слотами — время показываем по нему.
+        if (data.tz_offset !== undefined) {
+          WhTime.set(data.tz_offset);
+          updateSlotsDateNote();
+          updateWorkHoursNote();
         }
         if (data.weekday === false) {
           slotsContainer.innerHTML = '<p class="no-slots">Выберите будний день (пн–пт)</p>';
@@ -480,6 +501,13 @@
         label.className = 'label';
         label.textContent = labelText;
         el.appendChild(time);
+        // Другой пояс у клиента — под временем склада показываем его время.
+        if (WhTime.differs()) {
+          const local = document.createElement('div');
+          local.className = 'local';
+          local.textContent = 'у вас ' + WhTime.rangeToClient(slot.time_start, slot.time_end);
+          el.appendChild(local);
+        }
         el.appendChild(label);
         if (free) {
           el.addEventListener('click', () => startWizard(slot));
@@ -506,7 +534,8 @@
         warehouseName: wh.name,
         warehouseId: wh.id
       };
-      $('sumSlot').textContent = `${selected.date}, ${selected.timeStart}–${selected.timeEnd}, ${SLOT_NAMES[selected.type]}`;
+      $('sumSlot').textContent = `${selected.date}, ${selected.timeStart}–${selected.timeEnd} (${WhTime.label()}), ${SLOT_NAMES[selected.type]}`
+        + WhTime.clientHint(selected.timeStart, selected.timeEnd);
       $('sumWarehouse').textContent = wh.name || '—';
       resetForm();
       $('pickerBlock').style.display = 'none';
@@ -641,7 +670,9 @@
     function buildReview() {
       const accounts = accountList();
       const rows = [
-        ['Дата и время', selected ? `${selected.date}, ${selected.timeStart}–${selected.timeEnd}` : '—'],
+        ['Дата и время', selected
+          ? `${selected.date}, ${selected.timeStart}–${selected.timeEnd} (${WhTime.label()})` + WhTime.clientHint(selected.timeStart, selected.timeEnd)
+          : '—'],
         ['Тип записи', selected ? SLOT_NAMES[selected.type] : '—'],
         ['Склад', selected ? (selected.warehouseName || '—') : '—'],
         ['Организация', $('customerOrganization').value.trim() || '—'],
@@ -886,7 +917,8 @@
           alert('Заявка принята, но обратите внимание:\n\n' + data.warning);
         }
         $('successInfo').textContent =
-          `${selected.date}, ${selected.timeStart}–${selected.timeEnd}, ${SLOT_NAMES[selected.type]}`;
+          `${selected.date}, ${selected.timeStart}–${selected.timeEnd} (${WhTime.label()}), ${SLOT_NAMES[selected.type]}`
+          + WhTime.clientHint(selected.timeStart, selected.timeEnd);
         // Подробная схема проезда до выбранного склада
         WhDirections.render(selected.warehouseId, $('successDirections'));
         $('successModal').classList.add('open');
@@ -960,6 +992,7 @@
     MyBooking.init({ onChange: function () { if (!selected) loadSlots(); } });
     initDate();
     updateSlotsDateNote();
+    updateWorkHoursNote();
     updateDurationBadge();
     loadWarehouses();
     loadAllowNoAccount();

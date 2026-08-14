@@ -77,6 +77,10 @@ function initDatabase() {
   if (!whCols.some(c => c.name === 'route_moscow')) {
     db.exec("ALTER TABLE warehouses ADD COLUMN route_moscow TEXT DEFAULT ''");
   }
+  // Часовой пояс склада: пусто — используется общий из настроек кабинета.
+  if (!whCols.some(c => c.name === 'tz_offset')) {
+    db.exec("ALTER TABLE warehouses ADD COLUMN tz_offset TEXT DEFAULT ''");
+  }
 
   const colCheck = db.prepare("PRAGMA table_info('slots')").all();
   if (!colCheck.some(c => c.name === 'customer_account')) {

@@ -813,3 +813,12 @@ body.vk-page .review-list span { color: #18202a; }
 body.vk-page .wizard .review-box {
   background: #f7f9fc !important; border: 1px solid #e8edf3 !important; border-radius: 8px !important;
 }
+
+/* Время клиента под временем склада (другой часовой пояс) */
+.slot .local { font-size: 10px; color: #8a95a3; letter-spacing: 0; line-height: 1.1; }
+body.vk-page:not(.theme-hitech) .slot { gap: 2px; }
+body.vk-page:not(.theme-hitech) .slot .local { font-size: 9.5px; color: #8a95a3; }
+body.vk-page:not(.theme-hitech) .slot.free .local { color: #6b87a6; }
+body.vk-page:not(.theme-hitech) .slot.booked .local,
+body.vk-page:not(.theme-hitech) .slot.past .local { color: #b4bcc6; }
+body.theme-hitech .slot .local { color: #5f7396; }

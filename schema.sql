@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS warehouses (
   is_default INTEGER NOT NULL DEFAULT 0,
   directions TEXT DEFAULT '',              -- описание, как доехать
   map_scheme TEXT DEFAULT '',              -- схема проезда (картинка, data-URL)
-  route_moscow TEXT DEFAULT ''             -- маршрут из Москвы (шаги, по строке)
+  route_moscow TEXT DEFAULT '',            -- маршрут из Москвы (шаги, по строке)
+  tz_offset TEXT DEFAULT ''                -- часовой пояс склада (UTC±ч); пусто = общий из настроек
 );
 
 CREATE TABLE IF NOT EXISTS slots (

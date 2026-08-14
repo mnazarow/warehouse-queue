@@ -40,9 +40,27 @@ function appTzOffsetHours() {
   const envH = parseInt(process.env.TZ_OFFSET_HOURS, 10);
   return Number.isFinite(envH) ? envH : 3;
 }
-function slotInstantMs(date, timeStart) {
+// Часовой пояс конкретного склада (warehouses.tz_offset). Пусто/нет колонки —
+// используется общий пояс из настроек. Значение — смещение от UTC в часах.
+function warehouseTzOffsetHours(warehouseId) {
+  if (warehouseId === undefined || warehouseId === null || warehouseId === '') return appTzOffsetHours();
+  try {
+    const wh = db.prepare('SELECT * FROM warehouses WHERE id = ?').get(warehouseId);
+    if (wh && wh.tz_offset !== undefined && wh.tz_offset !== null && String(wh.tz_offset).trim() !== '') {
+      const h = parseInt(wh.tz_offset, 10);
+      if (Number.isFinite(h) && h >= -12 && h <= 14) return h;
+    }
+  } catch (e) {}
+  return appTzOffsetHours();
+}
+
+// Момент начала слота в UTC. Для складов в другом поясе учитывается их
+// собственное смещение, иначе «минимум за 45 минут» считалось бы по Москве.
+function slotInstantMs(date, timeStart, warehouseId) {
   const ms = Date.parse(`${date}T${timeStart}:00Z`);
-  return Number.isNaN(ms) ? NaN : ms - appTzOffsetHours() * 3600000;
+  if (Number.isNaN(ms)) return NaN;
+  const off = (warehouseId === undefined) ? appTzOffsetHours() : warehouseTzOffsetHours(warehouseId);
+  return ms - off * 3600000;
 }
 
 // За сколько дней вперёд можно записаться (настройка booking_max_days → env → 14).
@@ -424,7 +442,7 @@ function ensureFeatureSchema() {
       db.exec("CREATE TABLE IF NOT EXISTS booking_events (id SERIAL PRIMARY KEY, slot_id INTEGER DEFAULT 0, created_at TEXT DEFAULT '')");
       // address покрывает старые PG-базы, мигрированные до появления колонки —
       // именно её отсутствие ломало публичный список складов («Нет складов»).
-      ['address', 'directions', 'map_scheme', 'route_moscow'].forEach(function(c) {
+      ['address', 'directions', 'map_scheme', 'route_moscow', 'tz_offset'].forEach(function(c) {
         try { db.exec("ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS " + c + " TEXT DEFAULT ''"); } catch (e) {}
       });
       try { db.exec("ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS is_default INTEGER DEFAULT 0"); } catch (e) {}
@@ -435,7 +453,7 @@ function ensureFeatureSchema() {
       db.exec("CREATE TABLE IF NOT EXISTS booking_events (id INTEGER PRIMARY KEY AUTOINCREMENT, slot_id INTEGER DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')))");
       try {
         const wcols = sqliteDb.prepare("PRAGMA table_info('warehouses')").all().map(function(c) { return c.name; });
-        ['directions', 'map_scheme', 'route_moscow'].forEach(function(c) {
+        ['directions', 'map_scheme', 'route_moscow', 'tz_offset'].forEach(function(c) {
           if (wcols.indexOf(c) === -1) sqliteDb.exec("ALTER TABLE warehouses ADD COLUMN " + c + " TEXT DEFAULT ''");
         });
       } catch (e) {}
@@ -918,10 +936,16 @@ app.get('/api/warehouses', (req, res) => {
   // падал и страница показывала «Нет складов». Поля берём из строки безопасно.
   try {
     const rows = db.prepare('SELECT * FROM warehouses ORDER BY is_default DESC, name').all();
+    const globalTz = appTzOffsetHours();
     const list = rows.map(function (w) {
-      return { id: w.id, name: w.name, address: w.address || '', is_default: w.is_default };
+      let tz = globalTz;
+      if (w.tz_offset !== undefined && w.tz_offset !== null && String(w.tz_offset).trim() !== '') {
+        const h = parseInt(w.tz_offset, 10);
+        if (Number.isFinite(h) && h >= -12 && h <= 14) tz = h;
+      }
+      return { id: w.id, name: w.name, address: w.address || '', is_default: w.is_default, tz_offset: tz };
     });
-    res.json({ warehouses: list });
+    res.json({ warehouses: list, tz_offset: globalTz });
   } catch (err) {
     console.error('Public warehouses error:', err);
     res.status(500).json({ error: 'Ошибка загрузки складов' });
@@ -941,7 +965,8 @@ app.get('/api/warehouses/:id/directions', (req, res) => {
       address: wh.address || '',
       directions: wh.directions || '',
       mapScheme: wh.map_scheme || '',
-      routeMoscow: wh.route_moscow || ''
+      routeMoscow: wh.route_moscow || '',
+      tzOffset: warehouseTzOffsetHours(wh.id)
     });
   } catch (err) {
     console.error('Warehouse directions error:', err);
@@ -986,14 +1011,16 @@ app.get('/api/slots', async (req, res) => {
   // never served from cache.
   const minMs = Date.now() + bookingMinMs();
   const maxMs = Date.now() + bookingMaxDays() * 86400000;
+  // Часовой пояс склада: и для расчёта «просрочено», и для показа времени клиенту.
+  const tzOffset = warehouseTzOffsetHours(whId);
   const enriched = slots.map(s => {
-    const inst = slotInstantMs(s.date, s.time_start);
+    const inst = slotInstantMs(s.date, s.time_start, s.warehouse_id !== undefined ? s.warehouse_id : whId);
     return {
       ...s,
       past: inst <= minMs || inst > maxMs
     };
   });
-  res.json({ slots: enriched, weekday: true });
+  res.json({ slots: enriched, weekday: true, tz_offset: tzOffset });
 });
 
 app.get('/api/captcha', (req, res) => {
@@ -1116,7 +1143,7 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
       return res.status(400).json({ error: 'Вы указали более трех счетов в раздел До трех товаров в накладной, для отгрузки более трех товаров выберите раздел Сборный заказ' });
     }
   }
-  const slotMs = slotInstantMs(slot.date, slot.time_start);
+  const slotMs = slotInstantMs(slot.date, slot.time_start, slot.warehouse_id);
   if (slotMs <= Date.now() + bookingMinMs()) {
     return res.status(400).json({ error: 'Слот можно забронировать минимум за ' + bookingMinMinutes() + ' мин. до начала' });
   }
@@ -1254,7 +1281,7 @@ function cancelBlockReason(slot) {
   if (slot.completed) return 'Заказ уже выполнен — отмена невозможна.';
   if (slot.assembling) return 'Заказ уже на сборке — отмена невозможна, свяжитесь со складом.';
   if (slot.in_progress) return 'Заказ уже у кладовщика — отмена невозможна, свяжитесь со складом.';
-  const slotMs = slotInstantMs(slot.date, slot.time_start);
+  const slotMs = slotInstantMs(slot.date, slot.time_start, slot.warehouse_id);
   if (Number.isFinite(slotMs) && slotMs <= Date.now()) return 'Время визита уже наступило — отмена невозможна.';
   return '';
 }
@@ -1270,6 +1297,7 @@ function publicBookingView(slot) {
     warehouse_id: slot.warehouse_id || null,
     warehouse_name: slot.warehouse_name || '',
     warehouse_address: slot.warehouse_address || '',
+    tz_offset: warehouseTzOffsetHours(slot.warehouse_id),
     customer_name: slot.customer_name || '',
     customer_phone: slot.customer_phone || '',
     customer_organization: slot.customer_organization || '',
@@ -2773,19 +2801,32 @@ function validateMapScheme(mapScheme) {
   return { value: s };
 }
 
+// Часовой пояс склада из формы: пусто — берём общий из настроек.
+function normalizeTzOffset(v) {
+  if (v === undefined || v === null || String(v).trim() === '') return { value: '' };
+  const h = parseInt(v, 10);
+  if (!Number.isFinite(h) || h < -12 || h > 14) {
+    return { error: 'Часовой пояс склада: смещение от UTC от -12 до 14' };
+  }
+  return { value: String(h) };
+}
+
 app.post('/api/manager/warehouses', requireManager, (req, res) => {
-  const { name, address, isDefault, directions, mapScheme, routeMoscow } = req.body;
+  const { name, address, isDefault, directions, mapScheme, routeMoscow, tzOffset } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Name is required' });
   }
   const scheme = validateMapScheme(mapScheme);
   if (scheme.error) return res.status(400).json({ error: scheme.error });
+  const tz = normalizeTzOffset(tzOffset);
+  if (tz.error) return res.status(400).json({ error: tz.error });
   if (isDefault) {
     db.prepare('UPDATE warehouses SET is_default = 0').run();
   }
-  db.prepare('INSERT INTO warehouses (name, address, is_default, directions, map_scheme, route_moscow) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(name.trim(), address || '', isDefault ? 1 : 0, directions || '', scheme.value, routeMoscow || '');
+  db.prepare('INSERT INTO warehouses (name, address, is_default, directions, map_scheme, route_moscow, tz_offset) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(name.trim(), address || '', isDefault ? 1 : 0, directions || '', scheme.value, routeMoscow || '', tz.value);
   redisFlushByPrefix('warehouses');
+  redisFlushSlotsCache();
   res.json({ success: true });
 });
 
@@ -2808,12 +2849,19 @@ app.put('/api/manager/warehouses/:id', requireManager, (req, res) => {
     if (scheme.error) return res.status(400).json({ error: scheme.error });
     newScheme = scheme.value;
   }
+  let newTz = (wh.tz_offset === undefined || wh.tz_offset === null) ? '' : String(wh.tz_offset);
+  if (req.body.tzOffset !== undefined) {
+    const tz = normalizeTzOffset(req.body.tzOffset);
+    if (tz.error) return res.status(400).json({ error: tz.error });
+    newTz = tz.value;
+  }
   if (isDefault) {
     db.prepare('UPDATE warehouses SET is_default = 0').run();
   }
-  db.prepare('UPDATE warehouses SET name = ?, address = ?, is_default = ?, directions = ?, map_scheme = ?, route_moscow = ? WHERE id = ?')
-    .run(name.trim(), address || '', isDefault ? 1 : 0, newDirections, newScheme, newRouteMoscow, id);
+  db.prepare('UPDATE warehouses SET name = ?, address = ?, is_default = ?, directions = ?, map_scheme = ?, route_moscow = ?, tz_offset = ? WHERE id = ?')
+    .run(name.trim(), address || '', isDefault ? 1 : 0, newDirections, newScheme, newRouteMoscow, newTz, id);
   redisFlushByPrefix('warehouses');
+  redisFlushSlotsCache();
   res.json({ success: true });
 });
 
@@ -3913,8 +3961,9 @@ app.get('/api/ext/v1/slots', requireExtApi, (req, res) => {
   const maxMs = Date.now() + bookingMaxDays() * 86400000;
   res.json({
     weekday: true,
+    tz_offset: warehouseTzOffsetHours(whId),
     slots: slots.map(s => {
-      const inst = slotInstantMs(s.date, s.time_start);
+      const inst = slotInstantMs(s.date, s.time_start, s.warehouse_id !== undefined ? s.warehouse_id : whId);
       return { ...s, past: inst <= minMs || inst > maxMs };
     })
   });
@@ -3960,7 +4009,7 @@ app.post('/api/ext/v1/bookings', requireExtApi, async (req, res) => {
     if (accounts.length > 3 && slot.type === 'small') {
       return res.status(400).json({ error: 'Для слота «До 3-х товаров» — не более трёх счетов; выберите сборный заказ' });
     }
-    const slotMs = slotInstantMs(slot.date, slot.time_start);
+    const slotMs = slotInstantMs(slot.date, slot.time_start, slot.warehouse_id);
     if (slotMs <= Date.now() + bookingMinMs()) {
       return res.status(400).json({ error: 'Слот можно забронировать минимум за ' + bookingMinMinutes() + ' мин. до начала' });
     }

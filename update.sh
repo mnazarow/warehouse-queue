@@ -118,12 +118,16 @@ restart_app() {
       ;;
     manual)
       info "Перезапускаю node server.js..."
-      local pid
-      pid="$(pgrep -f 'node .*server\.js' | head -1 || true)"
-      if [ -n "$pid" ]; then
-        kill "$pid" 2>/dev/null || true
-        for _ in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
-        kill -9 "$pid" 2>/dev/null || true
+      # Убиваем ВСЕ процессы node server.js: если их два (старый держит порт),
+      # новый не сможет подняться, а старый продолжит отдавать старый код.
+      local pids pid
+      pids="$(pgrep -f 'node .*server\.js' || true)"
+      if [ -n "$pids" ]; then
+        info "Найдены процессы: $(echo $pids | tr '\n' ' ')"
+        for pid in $pids; do kill "$pid" 2>/dev/null || true; done
+        for _ in $(seq 1 10); do pgrep -f 'node .*server\.js' >/dev/null 2>&1 || break; sleep 0.5; done
+        for pid in $pids; do kill -9 "$pid" 2>/dev/null || true; done
+        sleep 1
       else
         warn "Работающий процесс не найден — просто запускаю новый"
       fi

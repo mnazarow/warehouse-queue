@@ -1545,6 +1545,11 @@
         <input type="text" id="newWarehouseAddress" placeholder="ул. Ленина, 1">
       </div>
       <div class="form-group">
+        <label>Часовой пояс склада (смещение от UTC, ч)</label>
+        <input type="number" id="newWarehouseTz" min="-12" max="14" step="1" placeholder="3 — Москва">
+        <div style="font-size:0.78rem;color:#718096;margin-top:4px">Время окон записи считается по этому поясу. Пусто — берётся общий пояс из настроек.</div>
+      </div>
+      <div class="form-group">
         <label>Как доехать (показывается клиенту после записи)</label>
         <textarea id="newWarehouseDirections" rows="3" placeholder="Съезд с МКАД на..., далее вторые ворота, пропуск у охраны" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
       </div>
@@ -1586,6 +1591,11 @@
       <div class="form-group">
         <label>Адрес</label>
         <input type="text" id="editWarehouseAddress">
+      </div>
+      <div class="form-group">
+        <label>Часовой пояс склада (смещение от UTC, ч)</label>
+        <input type="number" id="editWarehouseTz" min="-12" max="14" step="1" placeholder="3 — Москва">
+        <div style="font-size:0.78rem;color:#718096;margin-top:4px">Время окон записи считается по этому поясу. Пусто — берётся общий пояс из настроек.</div>
       </div>
       <div class="form-group">
         <label>Как доехать (показывается клиенту после записи)</label>
@@ -3613,13 +3623,18 @@
           return;
         }
         let html = `<div class="table-wrap"><table><thead><tr>
-          <th>ID</th><th>Название</th><th>Адрес</th><th>По умолч.</th><th>Добавлен</th><th class="col-actions">Действия</th>
+          <th>ID</th><th>Название</th><th>Адрес</th><th>Часовой пояс</th><th>По умолч.</th><th>Добавлен</th><th class="col-actions">Действия</th>
         </tr></thead><tbody>`;
         for (const w of data.warehouses) {
+          const tzRaw = (w.tz_offset === undefined || w.tz_offset === null) ? '' : String(w.tz_offset).trim();
+          const tzText = tzRaw === ''
+            ? '<span style="color:#a0aec0">общий</span>'
+            : 'UTC' + (Number(tzRaw) >= 0 ? '+' : '−') + Math.abs(Number(tzRaw)) + (Number(tzRaw) === 3 ? ' (МСК)' : '');
           html += `<tr>
             <td>${w.id}</td>
             <td>${escapeHtml(w.name)}</td>
             <td>${escapeHtml(w.address) || '—'}</td>
+            <td>${tzText}</td>
             <td>${w.is_default ? '<span class="badge badge-confirmed">Да</span>' : '—'}</td>
             <td class="col-time">${w.created_at ? w.created_at.replace('T', ' ').slice(0, 16) : '—'}</td>
             <td class="col-actions"><button class="btn btn-secondary btn-sm" onclick="openEditWarehouseModal(${w.id})" style="margin-right:4px">Ред.</button><button class="btn btn-danger btn-sm" onclick="deleteWarehouse(${w.id})">Удалить</button></td>
@@ -3689,6 +3704,7 @@
       document.getElementById('newWarehouseAddress').value = '';
       document.getElementById('newWarehouseDirections').value = '';
       document.getElementById('newWarehouseRouteMoscow').value = '';
+      document.getElementById('newWarehouseTz').value = '';
       clearSchemeFile('new');
       document.getElementById('newWarehouseDefault').checked = false;
       document.getElementById('createWarehouseError').style.display = 'none';
@@ -3717,6 +3733,7 @@
           name, address: address || undefined, isDefault,
           directions: document.getElementById('newWarehouseDirections').value.trim(),
           routeMoscow: document.getElementById('newWarehouseRouteMoscow').value.trim(),
+          tzOffset: document.getElementById('newWarehouseTz').value.trim(),
           mapScheme: schemeData.new
         })
       });
@@ -3728,6 +3745,7 @@
       document.getElementById('newWarehouseAddress').value = '';
       document.getElementById('newWarehouseDirections').value = '';
       document.getElementById('newWarehouseRouteMoscow').value = '';
+      document.getElementById('newWarehouseTz').value = '';
       clearSchemeFile('new');
       document.getElementById('newWarehouseDefault').checked = false;
       loadWarehouses();
@@ -3749,6 +3767,8 @@
         document.getElementById('editWarehouseAddress').value = w.address || '';
         document.getElementById('editWarehouseDirections').value = w.directions || '';
         document.getElementById('editWarehouseRouteMoscow').value = w.route_moscow || '';
+        document.getElementById('editWarehouseTz').value =
+          (w.tz_offset === undefined || w.tz_offset === null) ? '' : String(w.tz_offset).trim();
         schemeData.edit = w.map_scheme || '';
         document.getElementById('editWarehouseScheme').value = '';
         showSchemePreview('edit');
@@ -3778,6 +3798,7 @@
           name, address: address || undefined, isDefault,
           directions: document.getElementById('editWarehouseDirections').value.trim(),
           routeMoscow: document.getElementById('editWarehouseRouteMoscow').value.trim(),
+          tzOffset: document.getElementById('editWarehouseTz').value.trim(),
           mapScheme: schemeData.edit
         })
       });

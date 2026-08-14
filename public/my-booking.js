@@ -157,8 +157,12 @@
     $('myBookingTitle').textContent = 'Ваша запись';
     const list = $('myBookingList');
     list.innerHTML = '';
+    // Пояс склада этой записи (может отличаться от выбранного в сетке).
+    if (b.tz_offset !== undefined) global.WhTime.set(b.tz_offset);
     row('Дата', b.date);
-    row('Время', b.time_start + ' – ' + b.time_end);
+    // Время склада; если браузер клиента в другом поясе — рядом его время.
+    row('Время', b.time_start + ' – ' + b.time_end + ' (' + global.WhTime.label() + ')'
+      + global.WhTime.clientHint(b.time_start, b.time_end));
     row('Тип записи', b.typeLabel);
     row('Склад', b.warehouse_name + (b.warehouse_address ? ', ' + b.warehouse_address : ''));
     row('Статус', b.status);
@@ -286,6 +290,68 @@
     remember: remember,
     forget: forget,
     mineIds: mineIds
+  };
+
+  /* ------------------------------------------------------------------
+   * Время склада и время клиента.
+   * Слоты хранятся как «стенное» время склада (по умолчанию московское).
+   * Если браузер клиента в другом поясе, рядом показывается его время.
+   * ------------------------------------------------------------------ */
+  global.WhTime = {
+    // Текущий пояс склада; задаётся ответами /api/warehouses и /api/slots.
+    offset: 3,
+    set: function (h) {
+      const n = parseInt(h, 10);
+      if (Number.isFinite(n) && n >= -12 && n <= 14) this.offset = n;
+    },
+    // Смещение браузера от UTC в часах (может быть дробным, напр. 5.5).
+    clientOffset: function () {
+      return -new Date().getTimezoneOffset() / 60;
+    },
+    // Разница «у клиента минус склад» в часах.
+    diff: function () {
+      return this.clientOffset() - this.offset;
+    },
+    differs: function () {
+      return Math.abs(this.diff()) > 0.01;
+    },
+    label: function (h) {
+      const off = (h === undefined) ? this.offset : h;
+      if (off === 3) return 'МСК';
+      const sign = off >= 0 ? '+' : '−';
+      const abs = Math.abs(off);
+      const whole = Math.floor(abs);
+      const mins = Math.round((abs - whole) * 60);
+      return 'UTC' + sign + whole + (mins ? ':' + String(mins).padStart(2, '0') : '');
+    },
+    clientLabel: function () {
+      return this.label(this.clientOffset());
+    },
+    // «09:15» по времени склада -> «07:15» по времени браузера.
+    toClient: function (hhmm) {
+      const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})/);
+      if (!m) return '';
+      const total = Number(m[1]) * 60 + Number(m[2]) + Math.round(this.diff() * 60);
+      const day = ((total % 1440) + 1440) % 1440;
+      return String(Math.floor(day / 60)).padStart(2, '0') + ':' + String(day % 60).padStart(2, '0');
+    },
+    // «09:15–09:30» по времени клиента (с пометкой ±1 день при переходе суток).
+    rangeToClient: function (start, end) {
+      if (!this.differs()) return '';
+      const m = String(start || '').match(/^(\d{1,2}):(\d{2})/);
+      let suffix = '';
+      if (m) {
+        const total = Number(m[1]) * 60 + Number(m[2]) + Math.round(this.diff() * 60);
+        if (total < 0) suffix = ' (пред. день)';
+        else if (total >= 1440) suffix = ' (след. день)';
+      }
+      return this.toClient(start) + '–' + this.toClient(end) + suffix;
+    },
+    // Готовая подпись «(у вас 07:15–07:30)» либо пустая строка.
+    clientHint: function (start, end) {
+      if (!this.differs()) return '';
+      return ' (у вас ' + this.rangeToClient(start, end) + ', ' + this.clientLabel() + ')';
+    }
   };
 
   /* ------------------------------------------------------------------
