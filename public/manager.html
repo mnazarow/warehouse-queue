@@ -865,6 +865,24 @@
         </div>
 
         <div class="section-header" style="margin-top:24px">
+          <h2>Права доступа по разделам</h2>
+        </div>
+        <div style="max-width:900px;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:20px">
+          <div style="font-size:0.85rem;color:#4a5568;margin-bottom:12px">
+            Для каждой роли и раздела выберите уровень доступа. «Чтение» — раздел виден, но изменить ничего нельзя;
+            «Нет доступа» — вкладка скрыта и запросы отклоняются. Администратор всегда имеет полный доступ.
+          </div>
+          <div id="permissionsTable" style="overflow-x:auto">
+            <p class="no-slots">Загрузка...</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="savePermissions()">Сохранить права</button>
+            <button class="btn btn-secondary" onclick="resetPermissions()">Сбросить (всё разрешено)</button>
+            <span id="permissionsStatus" style="display:none;font-size:0.85rem"></span>
+          </div>
+        </div>
+
+        <div class="section-header" style="margin-top:24px">
           <h2>Обязательные поля записи</h2>
         </div>
         <div style="max-width:760px;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:20px">
@@ -938,7 +956,8 @@
         </div>
         <div class="form-group">
           <label>API ключ sms.ru</label>
-          <input type="text" id="smsruApiKey" placeholder="Введите API ключ" style="font-family:monospace;width:100%">
+          <input type="password" id="smsruApiKey" placeholder="Введите API ключ" style="font-family:monospace;width:100%" autocomplete="new-password">
+          <div id="smsruApiKeyHint" style="font-size:0.8rem;color:#718096;margin-top:4px"></div>
         </div>
         <div id="smsStatus" style="color:#38a169;margin-bottom:12px;display:none"></div>
         <button class="btn btn-primary" onclick="saveSmsSettings()">Сохранить</button>
@@ -988,9 +1007,10 @@
         <div class="form-group" style="margin-top:12px">
           <label>Пароль 1С</label>
           <div style="display:flex;gap:8px">
-            <input type="text" id="c1Password" placeholder="Пароль" style="font-family:monospace;width:100%" oninput="updateC1OrderValidationExample();updateC1PaymentCheckExample()">
+            <input type="password" id="c1Password" placeholder="Пароль" style="font-family:monospace;width:100%" autocomplete="new-password" oninput="updateC1OrderValidationExample();updateC1PaymentCheckExample()">
             <button class="btn btn-primary" onclick="saveC1Password()" style="white-space:nowrap">Сохранить</button>
           </div>
+          <div id="c1PasswordHint" style="font-size:0.8rem;color:#718096;margin-top:4px"></div>
         </div>
 
         <div class="form-group" style="margin-top:20px">
@@ -1145,7 +1165,8 @@
           </div>
           <div class="form-group">
             <label>Пароль</label>
-            <input type="password" id="redisPassword" placeholder="Оставьте пустым, если без пароля" style="font-family:monospace;width:100%">
+            <input type="password" id="redisPassword" placeholder="Оставьте пустым, если без пароля" style="font-family:monospace;width:100%" autocomplete="new-password">
+            <div id="redisPasswordHint" style="font-size:0.8rem;color:#718096;margin-top:4px"></div>
           </div>
           <div class="form-group">
             <label>Номер БД</label>
@@ -1195,7 +1216,8 @@
           </div>
           <div class="form-group">
             <label>Пароль</label>
-            <input type="password" id="pgsqlPassword" style="font-family:monospace;width:100%">
+            <input type="password" id="pgsqlPassword" style="font-family:monospace;width:100%" autocomplete="new-password">
+            <div id="pgsqlPasswordHint" style="font-size:0.8rem;color:#718096;margin-top:4px"></div>
           </div>
           <div style="display:flex;gap:8px;margin-top:12px">
             <button class="btn btn-primary" onclick="savePgSqlSettings()">Сохранить настройки</button>
@@ -1886,17 +1908,86 @@
       return Array.from(sel.selectedOptions).map(function(o) { return o.value; }).filter(Boolean);
     }
 
-    function escapeHtml(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
-    function jsStr(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\r?\n/g,' ');}
 
-    function applyAdminVisibility(isAdmin) {
+    // Секреты (пароли, ключи) сервер больше не отдаёт в кабинет — приходит
+    // только признак «задано». Поле остаётся пустым: пустое значение при
+    // сохранении означает «не менять», прочерк — очистить.
+    function showSecretState(inputId, hintId, isSet) {
+      const input = document.getElementById(inputId);
+      const hint = document.getElementById(hintId);
+      if (input) {
+        input.value = '';
+        input.placeholder = isSet ? 'задано' : 'не задано';
+      }
+      if (hint) {
+        hint.textContent = isSet
+          ? 'Значение сохранено. Оставьте поле пустым, чтобы не менять; введите «-», чтобы очистить.'
+          : 'Значение не задано.';
+        hint.style.color = isSet ? '#2f855a' : '#718096';
+      }
+    }
+
+    function escapeHtml(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+    // Значение попадает внутрь строкового литерала JS, который лежит в HTML-атрибуте
+    // onclick="...". Поэтому экранируем ДВАЖДЫ: сначала как строку JS, затем как
+    // содержимое HTML-атрибута. Без второго шага последовательность &#39; во вводе
+    // клиента декодируется браузером в кавычку уже ПОСЛЕ JS-экранирования и
+    // разрывает литерал (хранимая XSS через имя/телефон из формы записи).
+    function jsStr(v){return escapeHtml(String(v==null?'':v).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"').replace(/\r?\n/g,' '));}
+
+    // Права текущего пользователя по разделам: {orders:'write', journal:'read', ...}
+    let currentPermissions = null;
+
+    function sectionLevel(tab) {
+      if (!currentPermissions) return 'write';
+      const lvl = currentPermissions[tab];
+      return lvl === undefined ? 'write' : lvl;
+    }
+
+    // Раздел доступен только на чтение — гасим кнопки изменения внутри вкладки.
+    function applyReadOnlyLook(tab) {
+      const pane = document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1));
+      if (!pane) return;
+      pane.querySelectorAll('button').forEach(function (b) {
+        const t = (b.textContent || '').toLowerCase();
+        if (/добав|сохран|удал|измен|создать|сброс|перегенер|забан|разбан|назначить|отмен|ред\./.test(t)) {
+          b.disabled = true;
+          b.title = 'Раздел доступен только для просмотра';
+          b.style.opacity = '0.5';
+          b.style.cursor = 'not-allowed';
+        }
+      });
+    }
+
+    function applyAdminVisibility(isAdmin, permissions) {
+      currentPermissions = permissions || null;
+      // Возвращаем видимость всем вкладкам: иначе ограничения предыдущего
+      // пользователя остались бы висеть после смены учётной записи.
+      document.querySelectorAll('.tab-link[data-tab]').forEach(function (b) { b.style.display = ''; });
+      // Настройки и менеджеры — всегда только администратору.
       ['settings', 'managers'].forEach(function(t) {
         const btn = document.querySelector('.tab-link[data-tab="' + t + '"]');
         if (btn) btn.style.display = isAdmin ? '' : 'none';
       });
-      if (!isAdmin) {
-        const active = document.querySelector('.tab-link.active');
-        if (active && (active.dataset.tab === 'settings' || active.dataset.tab === 'managers')) switchTab('orders');
+      // Остальные вкладки — по правам роли.
+      if (!isAdmin && currentPermissions) {
+        document.querySelectorAll('.tab-link[data-tab]').forEach(function (btn) {
+          const tab = btn.dataset.tab;
+          if (tab === 'settings' || tab === 'managers') return;
+          if (sectionLevel(tab) === 'none') btn.style.display = 'none';
+        });
+      }
+      const active = document.querySelector('.tab-link.active');
+      if (active) {
+        const t = active.dataset.tab;
+        const hidden = (!isAdmin && (t === 'settings' || t === 'managers'))
+          || (!isAdmin && sectionLevel(t) === 'none');
+        if (hidden) {
+          const first = Array.prototype.find.call(
+            document.querySelectorAll('.tab-link[data-tab]'),
+            function (b) { return b.style.display !== 'none'; });
+          switchTab(first ? first.dataset.tab : 'orders');
+        }
       }
     }
 
@@ -1931,7 +2022,7 @@
         document.getElementById('loginView').style.display = 'none';
         document.getElementById('dashboardView').style.display = 'block';
         document.getElementById('usernameDisplay').textContent = [data.firstName, data.lastName].filter(Boolean).join(' ') || data.username;
-        applyAdminVisibility(!!data.isAdmin);
+        applyAdminVisibility(!!data.isAdmin, data.permissions);
         initServerClock();
         initFilters();
         await loadWarehouseFilter();
@@ -2350,6 +2441,7 @@
       document.querySelectorAll('.tab-link').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
       document.querySelector(`.tab-link[data-tab="${name}"]`).classList.add('active');
+      if (sectionLevel(name) === 'read') setTimeout(function () { applyReadOnlyLook(name); }, 300);
       document.getElementById(`tab${name.charAt(0).toUpperCase() + name.slice(1)}`).classList.add('active');
       if (name === 'managers') loadManagers();
       if (name === 'stats') loadStats();
@@ -2366,7 +2458,7 @@
       if (name === 'bannedphones') loadBannedPhones();
       if (name === 'bannedips') loadBannedIps();
       if (name === 'vehicleclasses') { loadVehicleClasses(); loadLogisticians(); loadLoadTypes(); }
-      if (name === 'settings') { loadAbout(); loadSettings(); loadAutobackup(); loadAnalytics('visits'); loadAnalytics('bookings'); loadDevices(); loadPrivacy(); loadCookiePolicy(); loadBookingMessage(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
+      if (name === 'settings') { loadAbout(); loadSettings(); loadPermissions(); loadAutobackup(); loadAnalytics('visits'); loadAnalytics('bookings'); loadDevices(); loadPrivacy(); loadCookiePolicy(); loadBookingMessage(); loadNetworks(); loadC1Settings(); loadC1CheckLogs(); loadLogos(); loadRedisSettings(); loadCacheTtl(); loadPgSqlSettings(); loadMigrationStatus(); }
     }
 
     let aboutTimer = null;
@@ -2748,7 +2840,7 @@
 
         const smsRes = await fetch('/api/manager/settings/smsru', { credentials: 'include' });
         const smsData = await smsRes.json();
-        document.getElementById('smsruApiKey').value = smsData.apiKey || '';
+        showSecretState('smsruApiKey', 'smsruApiKeyHint', !!smsData.apiKeySet);
 
         const tzRes = await fetch('/api/manager/settings/timezone', { credentials: 'include' });
         const tzData = await tzRes.json();
@@ -2776,6 +2868,118 @@
           document.getElementById('requireLoadType').checked = rfData.loadType !== false;
         }
       } catch {}
+    }
+
+    /* ---------- Права доступа по разделам ---------- */
+
+    let permissionsData = null;
+
+    function permissionsFlash(msg, isError) {
+      const el = document.getElementById('permissionsStatus');
+      if (!el) return;
+      el.textContent = msg;
+      el.style.color = isError ? '#e53e3e' : '#38a169';
+      el.style.display = 'inline';
+      setTimeout(function () { el.style.display = 'none'; }, 5000);
+    }
+
+    async function loadPermissions() {
+      const box = document.getElementById('permissionsTable');
+      if (!box) return;
+      try {
+        const res = await fetch('/api/manager/settings/permissions', { credentials: 'include' });
+        if (!res.ok) {
+          box.innerHTML = '<p class="no-slots">' +
+            (res.status === 404 ? 'На сервере старая версия приложения — обновите код и перезапустите его'
+                                : 'Не удалось загрузить права (HTTP ' + res.status + ')') + '</p>';
+          return;
+        }
+        permissionsData = await res.json();
+        renderPermissions();
+      } catch (e) {
+        box.innerHTML = '<p class="no-slots">Ошибка сети: ' + escapeHtml(e.message) + '</p>';
+      }
+    }
+
+    function renderPermissions() {
+      const box = document.getElementById('permissionsTable');
+      if (!box || !permissionsData) return;
+      const roles = permissionsData.roles || [];
+      const levels = [
+        { v: 'write', t: 'Чтение и запись' },
+        { v: 'read', t: 'Только чтение' },
+        { v: 'none', t: 'Нет доступа' }
+      ];
+      let html = '<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+        '<th style="text-align:left;padding:8px;border-bottom:2px solid #e2e8f0">Раздел</th>';
+      roles.forEach(function (r) {
+        html += '<th style="text-align:left;padding:8px;border-bottom:2px solid #e2e8f0;min-width:170px">' + escapeHtml(r.label) + '</th>';
+      });
+      html += '</tr></thead><tbody>';
+      (permissionsData.sections || []).forEach(function (sec) {
+        html += '<tr><td style="padding:8px;border-bottom:1px solid #edf2f7">' + escapeHtml(sec.label) +
+          (sec.sensitive ? ' <span title="Раздел содержит персональные данные клиентов" style="color:#b7791f;font-size:0.78rem">• персональные данные</span>' : '') +
+          '</td>';
+        roles.forEach(function (r) {
+          html += '<td style="padding:8px;border-bottom:1px solid #edf2f7">';
+          if (sec.adminOnly) {
+            html += '<span style="color:#a0aec0;font-size:0.85rem">только администратор</span>';
+          } else if ((sec.roles || []).indexOf(r.key) === -1) {
+            html += '<span style="color:#cbd5e0">—</span>';
+          } else {
+            const cur = (permissionsData.permissions[r.key] || {})[sec.key] || 'none';
+            html += '<select data-role="' + escapeHtml(r.key) + '" data-section="' + escapeHtml(sec.key) +
+              '" style="width:100%;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem">';
+            levels.forEach(function (l) {
+              html += '<option value="' + l.v + '"' + (cur === l.v ? ' selected' : '') + '>' + l.t + '</option>';
+            });
+            html += '</select>';
+          }
+          html += '</td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      box.innerHTML = html;
+    }
+
+    function collectPermissions() {
+      const out = {};
+      document.querySelectorAll('#permissionsTable select[data-role]').forEach(function (sel) {
+        const role = sel.dataset.role, section = sel.dataset.section;
+        if (!out[role]) out[role] = {};
+        out[role][section] = sel.value;
+      });
+      return out;
+    }
+
+    async function savePermissions() {
+      try {
+        const res = await fetch('/api/manager/settings/permissions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ permissions: collectPermissions() })
+        });
+        let data = null;
+        try { data = await res.json(); } catch (e) {}
+        if (res.ok && data && data.success) {
+          if (permissionsData) permissionsData.permissions = data.permissions;
+          permissionsFlash('Права сохранены. Пользователи увидят изменения после обновления страницы.');
+        } else {
+          permissionsFlash((data && data.error) ||
+            (res.status === 404 ? 'На сервере старая версия приложения — обновите код и перезапустите его'
+                                : 'Ошибка сохранения (HTTP ' + res.status + ')'), true);
+        }
+      } catch (e) {
+        permissionsFlash('Ошибка сети: ' + e.message, true);
+      }
+    }
+
+    function resetPermissions() {
+      if (!confirm('Вернуть всем ролям полный доступ ко всем разделам?')) return;
+      document.querySelectorAll('#permissionsTable select[data-role]').forEach(function (sel) { sel.value = 'write'; });
+      savePermissions();
     }
 
     async function saveRequiredFields() {
@@ -3071,7 +3275,7 @@
         document.getElementById('redisEnabled').checked = data.enabled;
         document.getElementById('redisHost').value = data.host || '127.0.0.1';
         document.getElementById('redisPort').value = data.port || 6379;
-        document.getElementById('redisPassword').value = data.password || '';
+        showSecretState('redisPassword', 'redisPasswordHint', !!data.passwordSet);
         document.getElementById('redisDb').value = data.db || 0;
         updateRedisStatusUI(data.status);
         toggleRedisFields(data.enabled);
@@ -4410,7 +4614,7 @@
       try {
         const res = await fetch('/api/manager/settings/smsru', { credentials: 'include' });
         const data = await res.json();
-        document.getElementById('smsruApiKey').value = data.apiKey || '';
+        showSecretState('smsruApiKey', 'smsruApiKeyHint', !!data.apiKeySet);
       } catch {}
     }
 
@@ -4487,7 +4691,7 @@
         }
         document.getElementById('c1ServerUrl').value = data.serverUrl || '';
         document.getElementById('c1Username').value = data.username || '';
-        document.getElementById('c1Password').value = data.password || '';
+        showSecretState('c1Password', 'c1PasswordHint', !!data.passwordSet);
         document.getElementById('c1OrderValidationUrl').value = data.orderValidationUrl || '';
         updateC1OrderValidationExample();
         document.getElementById('c1PaymentCheckUrl').value = data.paymentCheckUrl || '';
@@ -5501,7 +5705,10 @@
       }
       urlEl.style.color = '#2d3748';
       urlEl.textContent = `POST ${url}`;
-      authEl.innerHTML = `Authorization: Basic ${b64utf8(username + ':' + password)}<br><span style="color:#a0aec0">(логин: ${username} · пароль: ${password})</span><br>Content-Type: application/json<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+      // Пароль в примере не показываем; значения экранируются — иначе логин из
+      // настроек попадал бы в разметку как есть.
+      const shownPass = password ? '••••••' : (document.getElementById('c1Password').placeholder === 'задано' ? 'сохранён' : 'не задан');
+      authEl.innerHTML = `Authorization: Basic ${escapeHtml(b64utf8(username + ':' + password))}<br><span style="color:#a0aec0">(логин: ${escapeHtml(username)} · пароль: ${shownPass})</span><br>Content-Type: application/json<br><br>Body:<br>${escapeHtml(JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2))}`;
     }
 
     async function saveC1PaymentCheckUrl() {
@@ -5542,7 +5749,10 @@
       }
       urlEl.style.color = '#2d3748';
       urlEl.textContent = `POST ${url}`;
-      authEl.innerHTML = `Authorization: Basic ${b64utf8(username + ':' + password)}<br><span style="color:#a0aec0">(логин: ${username} · пароль: ${password})</span><br>Content-Type: application/json<br><br>Body:<br>${JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2)}`;
+      // Пароль в примере не показываем; значения экранируются — иначе логин из
+      // настроек попадал бы в разметку как есть.
+      const shownPass = password ? '••••••' : (document.getElementById('c1Password').placeholder === 'задано' ? 'сохранён' : 'не задан');
+      authEl.innerHTML = `Authorization: Basic ${escapeHtml(b64utf8(username + ':' + password))}<br><span style="color:#a0aec0">(логин: ${escapeHtml(username)} · пароль: ${shownPass})</span><br>Content-Type: application/json<br><br>Body:<br>${escapeHtml(JSON.stringify({ invoce_number: ['0000-019606', '0000-019607'] }, null, 2))}`;
     }
 
     async function saveC1Notes() {
@@ -5929,7 +6139,7 @@
         document.getElementById('pgsqlPort').value = data.port || 5432;
         document.getElementById('pgsqlDatabase').value = data.database || '';
         document.getElementById('pgsqlUser').value = data.user || '';
-        document.getElementById('pgsqlPassword').value = data.password || '';
+        showSecretState('pgsqlPassword', 'pgsqlPasswordHint', !!data.passwordSet);
       } catch (e) {}
     }
 
@@ -6163,7 +6373,7 @@
           document.getElementById('loginView').style.display = 'none';
           document.getElementById('dashboardView').style.display = 'block';
           document.getElementById('usernameDisplay').textContent = [data.firstName, data.lastName].filter(Boolean).join(' ') || data.username;
-          applyAdminVisibility(!!data.isAdmin);
+          applyAdminVisibility(!!data.isAdmin, data.permissions);
         initServerClock();
           initFilters();
           await loadWarehouseFilter();

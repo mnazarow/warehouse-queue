@@ -63,6 +63,28 @@ function slotInstantMs(date, timeStart, warehouseId) {
   return ms - off * 3600000;
 }
 
+// Дата слота: строгий формат и разумный диапазон. Без этой проверки публичный
+// запрос /api/slots?date=... заставлял сервер создавать окна на любую дату
+// (перебором дат база раздувалась до миллионов строк).
+const SLOT_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function validSlotDate(v) {
+  if (typeof v !== 'string' || !SLOT_DATE_RE.test(v)) return false;
+  const ms = Date.parse(v + 'T00:00:00Z');
+  if (!Number.isFinite(ms)) return false;
+  // Отсекает несуществующие даты вида 2026-02-31.
+  if (new Date(ms).toISOString().slice(0, 10) !== v) return false;
+  const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+  return ms >= today - 400 * 86400000 && ms <= today + 400 * 86400000;
+}
+// Досоздавать окна можно только внутри окна записи — на прошлое и на далёкое
+// будущее слоты не генерируются.
+function canGenerateSlots(v) {
+  if (!validSlotDate(v)) return false;
+  const ms = Date.parse(v + 'T00:00:00Z');
+  const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+  return ms >= today && ms <= today + (bookingMaxDays() + 1) * 86400000;
+}
+
 // За сколько дней вперёд можно записаться (настройка booking_max_days → env → 14).
 function bookingMaxDays() {
   try {
@@ -113,23 +135,181 @@ if (process.env.TRUST_PROXY) {
   app.set('trust proxy', tp === 'true' ? true : (isNaN(Number(tp)) ? tp : Number(tp)));
 }
 
+app.disable('x-powered-by');
+
+// Заголовки безопасности. Кабинет нельзя открыть в чужом iframe (кликджекинг),
+// браузер не угадывает тип содержимого, Referer наружу не утекает.
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Cookie');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  if (process.env.COOKIE_SECURE === '1') {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
+
+// CORS. Раньше «*» вместе с Allow-Credentials стоял на всех маршрутах, включая
+// кабинет. Теперь общий доступ открыт только публичной части и внешнему API,
+// а к /api/manager и /api/storekeeper кросс-доменные запросы не допускаются.
+const CORS_ORIGINS = String(process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+app.use((req, res, next) => {
+  const p = req.path || '';
+  const isPrivate = p.indexOf('/api/manager') === 0 || p.indexOf('/api/storekeeper') === 0;
+  const origin = req.headers.origin;
+  if (isPrivate) {
+    if (origin && CORS_ORIGINS.indexOf(origin) !== -1) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
+    }
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key, Authorization, X-Api-Token');
+  }
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-app.use(express.json({ limit: '64mb' }));
+
+// Тело запроса: 100 КБ по умолчанию. Раньше 64 МБ принимались на любом маршруте
+// до всякой проверки прав — несколько параллельных запросов съедали память.
+// Крупные тела разрешены точечно там, где грузят картинки и копии базы.
+const jsonSmall = express.json({ limit: '100kb' });
+const jsonMedium = express.json({ limit: '8mb' });
+const jsonLarge = express.json({ limit: '256mb' });
+app.use(['/api/manager/warehouses', '/api/manager/settings'], jsonMedium);
+app.use(['/api/manager/restore', '/api/manager/migrate'], jsonLarge);
+app.use(function (req, res, next) {
+  if (req._body) return next();
+  return jsonSmall(req, res, next);
+});
 app.use('/manager.html', requireAllowedIP);
 app.use('/api/manager', requireAllowedIP);
 app.use(express.static(path.join(__dirname, 'public')));
+// ---------------------------------------------------------------------------
+// Безопасность: пароли, секрет сессии, сравнение секретов
+// ---------------------------------------------------------------------------
+
+// Пароли менеджеров: scrypt с солью. Старые несолёные SHA-256-хеши продолжают
+// работать (вход не ломается) и молча переписываются на scrypt при первом входе.
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16);
+  const dk = crypto.scryptSync(String(pw), salt, 64, { N: 16384, r: 8, p: 1, maxmem: 96 * 1024 * 1024 });
+  return 'scrypt$16384$8$1$' + salt.toString('hex') + '$' + dk.toString('hex');
+}
+
+// true — пароль верен; 'rehash' — верен, но хеш старого формата; false — неверен.
+function verifyPassword(pw, stored) {
+  const st = String(stored || '');
+  if (!st) return false;
+  if (st.indexOf('scrypt$') !== 0) {
+    const legacy = crypto.createHash('sha256').update(String(pw)).digest('hex');
+    return safeEqual(legacy, st) ? 'rehash' : false;
+  }
+  const parts = st.split('$');
+  if (parts.length !== 6) return false;
+  try {
+    const dk = crypto.scryptSync(String(pw), Buffer.from(parts[4], 'hex'), 64,
+      { N: parseInt(parts[1], 10), r: parseInt(parts[2], 10), p: parseInt(parts[3], 10), maxmem: 96 * 1024 * 1024 });
+    const want = Buffer.from(parts[5], 'hex');
+    return dk.length === want.length && crypto.timingSafeEqual(dk, want);
+  } catch (e) { return false; }
+}
+
+// Сравнение секретов за постоянное время (токены, ключи, хеши).
+function safeEqual(a, b) {
+  const A = Buffer.from(String(a == null ? '' : a));
+  const B = Buffer.from(String(b == null ? '' : b));
+  if (A.length !== B.length) { try { crypto.timingSafeEqual(A, A); } catch (e) {} return false; }
+  try { return crypto.timingSafeEqual(A, B); } catch (e) { return false; }
+}
+
+// Требования к паролю. Возвращает текст ошибки либо null.
+function validatePassword(pw, username) {
+  const s = String(pw == null ? '' : pw);
+  if (s.length < 8) return 'Пароль должен быть не короче 8 символов';
+  if (s.length > 200) return 'Пароль слишком длинный';
+  if (username && s.toLowerCase().indexOf(String(username).toLowerCase()) !== -1) {
+    return 'Пароль не должен содержать логин';
+  }
+  const weak = ['admin123', 'password', '12345678', 'qwertyui', 'admin1234', '11111111'];
+  if (weak.indexOf(s.toLowerCase()) !== -1) return 'Слишком простой пароль — придумайте другой';
+  return null;
+}
+
+// Секрет подписи cookie. Раньше при отсутствии SESSION_SECRET подставлялась
+// строка из исходников — зная её, чужую сессию можно подписать самому.
+// Теперь секрет генерируется один раз и хранится в файле рядом с базой.
+function resolveSessionSecret() {
+  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 16) {
+    return process.env.SESSION_SECRET;
+  }
+  const file = path.join(__dirname, '.session-secret');
+  try {
+    const existing = fs.readFileSync(file, 'utf8').trim();
+    if (existing.length >= 32) return existing;
+  } catch (e) {}
+  const generated = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(file, generated, { mode: 0o600 });
+    console.log('Создан файл .session-secret (секрет подписи сессий)');
+  } catch (e) {
+    console.error('Не удалось сохранить .session-secret:', e.message,
+      '— секрет будет меняться при каждом перезапуске (все выйдут из кабинета)');
+  }
+  return generated;
+}
+const SESSION_SECRET = resolveSessionSecret();
+
+// Защита входа в кабинет от перебора пароля: считаем неудачные попытки
+// по паре «IP + логин», после 5 неудач включаем нарастающую паузу.
+const loginFails = new Map();
+const LOGIN_MAX_FAILS = 5;
+function loginKey(req) {
+  const user = String((req.body && req.body.username) || '').toLowerCase().slice(0, 64);
+  return (getIp(req) || 'unknown') + '|' + user;
+}
+function loginBlockedFor(key) {
+  const e = loginFails.get(key);
+  if (!e || !e.until) return 0;
+  const left = e.until - Date.now();
+  return left > 0 ? left : 0;
+}
+function loginRegisterFail(key) {
+  const e = loginFails.get(key) || { n: 0, until: 0 };
+  e.n++;
+  if (e.n >= LOGIN_MAX_FAILS) {
+    e.until = Date.now() + Math.min(15 * 60000, Math.pow(2, e.n - LOGIN_MAX_FAILS) * 30000);
+  }
+  e.seen = Date.now();
+  if (loginFails.size > 20000) loginFails.clear();
+  loginFails.set(key, e);
+  return e;
+}
+setInterval(function () {
+  const limit = Date.now() - 60 * 60000;
+  for (const [k, v] of loginFails) if ((v.seen || 0) < limit && !loginBlockedFor(k)) loginFails.delete(k);
+}, 10 * 60000).unref();
+
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'warehouse-queue-secret-key-2025',
+  name: 'wq.sid',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 24 * 60 * 60 * 1000, sameSite: 'lax', httpOnly: true }
+  rolling: true,
+  cookie: {
+    maxAge: 12 * 60 * 60 * 1000,
+    sameSite: 'lax',
+    httpOnly: true,
+    // Включите COOKIE_SECURE=1, когда сайт работает по HTTPS: тогда cookie
+    // сессии не уйдёт по открытому HTTP. По умолчанию выключено, чтобы вход
+    // не сломался на установках без TLS.
+    secure: process.env.COOKIE_SECURE === '1'
+  }
 }));
 // Admin-only areas (Settings tab, manager management, backups, DB migration,
 // IP networks, app updates). Must be AFTER the session middleware so req.session
@@ -139,6 +319,10 @@ app.use(session({
  '/api/manager/check-update', '/api/manager/networks', '/api/manager/migration'].forEach(function(p) {
   app.use(p, requireManager, requireAdmin);
 });
+
+// Права по разделам: применяются к кабинету менеджера и кабинету кладовщика.
+// Стоит после проверки сессии и до самих маршрутов.
+app.use(['/api/manager', '/api/storekeeper'], enforcePermissions);
 
 const sqliteDb = initDatabase();
 const dbAdapter = require('./db-adapter');
@@ -223,10 +407,19 @@ function initRedis() {
     if (config.port !== 6379) opts.port = config.port;
     if (config.password) opts.password = config.password;
     if (config.db) opts.db = config.db;
+    // enable_offline_queue: false — команды к недоступному Redis сразу
+    // возвращают ошибку вместо бесконечного ожидания в очереди.
+    opts.enable_offline_queue = false;
+    opts.connect_timeout = 3000;
+    opts.retry_strategy = function (o) { return Math.min((o.attempt || 1) * 200, 5000); };
     redisClient = redis.createClient(opts);
-    redisClient.on('error', function() {});
-    redisClient.on('connect', function() {});
-    redisClient.on('ready', function() {});
+    redisClient.on('error', function (e) {
+      // Раньше ошибка проглатывалась молча — о проблемах с кэшем никто не узнавал.
+      const msg = (e && e.message) ? e.message : String(e);
+      if (msg !== lastRedisError) { lastRedisError = msg; console.error('Redis:', msg); }
+    });
+    redisClient.on('connect', function() { lastRedisError = ''; });
+    redisClient.on('ready', function() { redisDegradedUntil = 0; });
   } catch (err) {
     redisClient = null;
     redisEnabled = false;
@@ -251,29 +444,63 @@ function redisRequestsLastHour() {
   return sum;
 }
 
-function redisGet(key) {
-  return new Promise(function(resolve) {
-    if (!redisClient || !redisEnabled) return resolve(null);
-    countRedisCall();
-    redisClient.get(key, function(err, val) {
-      resolve(err ? null : val);
-    });
+// Кэш — вспомогательный слой, поэтому ни одна операция с Redis не должна
+// задерживать ответ клиенту. Раньше промис ждал колбэка бесконечно: если Redis
+// подвисал, все запросы со чтением кэша зависали вместе с ним. Теперь у каждой
+// операции есть предел ожидания, а после сбоя кэш на время отключается.
+const REDIS_OP_TIMEOUT_MS = parseInt(process.env.REDIS_OP_TIMEOUT_MS, 10) || 300;
+let redisDegradedUntil = 0;
+let lastRedisError = '';
+function redisUsable() {
+  return !!(redisClient && redisEnabled && Date.now() >= redisDegradedUntil);
+}
+function redisDegrade(what) {
+  redisDegradedUntil = Date.now() + 30000;
+  console.error('Redis не отвечает (' + what + ') — кэш отключён на 30 с');
+}
+function redisWithTimeout(what, starter, fallback) {
+  return new Promise(function (resolve) {
+    let done = false;
+    const timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      redisDegrade(what);
+      resolve(fallback);
+    }, REDIS_OP_TIMEOUT_MS);
+    try {
+      starter(function (value) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      });
+    } catch (e) {
+      if (!done) { done = true; clearTimeout(timer); resolve(fallback); }
+    }
   });
+}
+
+function redisGet(key) {
+  if (!redisUsable()) return Promise.resolve(null);
+  countRedisCall();
+  return redisWithTimeout('get', function (done) {
+    redisClient.get(key, function (err, val) { done(err ? null : val); });
+  }, null);
 }
 
 // Атомарный счётчик с TTL (для лимита неверных капч). Возвращает текущее
 // значение, либо null если Redis недоступен — тогда вызывающий код падает на
 // счётчик в памяти процесса.
 function redisIncr(key, ttlSeconds) {
-  return new Promise(function(resolve) {
-    if (!redisClient || !redisEnabled) return resolve(null);
-    countRedisCall();
-    redisClient.incr(key, function(err, n) {
-      if (err) return resolve(null);
-      try { redisClient.expire(key, ttlSeconds, function() {}); } catch (e) {}
-      resolve(n);
+  if (!redisUsable()) return Promise.resolve(null);
+  countRedisCall();
+  return redisWithTimeout('incr', function (done) {
+    redisClient.incr(key, function (err, n) {
+      if (err) return done(null);
+      try { redisClient.expire(key, ttlSeconds, function () {}); } catch (e) {}
+      done(n);
     });
-  });
+  }, null);
 }
 function redisDel(key) {
   if (redisClient && redisEnabled) { try { redisClient.del(key); } catch (e) {} }
@@ -458,6 +685,20 @@ function ensureFeatureSchema() {
         });
       } catch (e) {}
     }
+    // Индексы под частые выборки — и для SQLite, и для PostgreSQL.
+    // Синтаксис CREATE INDEX IF NOT EXISTS понимают обе СУБД.
+    [
+      'CREATE INDEX IF NOT EXISTS idx_slots_date_type_wh ON slots(date, type, warehouse_id)',
+      'CREATE INDEX IF NOT EXISTS idx_slots_phone ON slots(customer_phone)',
+      'CREATE INDEX IF NOT EXISTS idx_slots_booked_at ON slots(booked_at)',
+      'CREATE INDEX IF NOT EXISTS idx_slots_wh_status ON slots(warehouse_id, is_booked, completed)',
+      'CREATE INDEX IF NOT EXISTS idx_banned_ips_ip ON banned_ips(ip)',
+      'CREATE INDEX IF NOT EXISTS idx_banned_phones_ph ON banned_phones(phone)',
+      'CREATE INDEX IF NOT EXISTS idx_user_logs_created ON user_logs(created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_page_visits_at ON page_visits(visited_at)',
+      'CREATE INDEX IF NOT EXISTS idx_booking_events_at ON booking_events(created_at)'
+    ].forEach(function (sql) { try { db.exec(sql); } catch (e) {} });
+
     // Разовый перенос истории бронирований в журнал статистики.
     try {
       const cnt = db.prepare('SELECT COUNT(*) AS cnt FROM booking_events').get();
@@ -483,8 +724,15 @@ function getIp(req) {
   const trust = process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true';
   let ip = '';
   if (trust && req.headers['x-forwarded-for']) {
-    ip = String(req.headers['x-forwarded-for']).split(',')[0].trim();
-  } else {
+    // nginx с `$proxy_add_x_forwarded_for` ДОПИСЫВАЕТ реальный адрес в конец,
+    // а всё, что левее, прислал сам клиент. Раньше бралось первое значение —
+    // поэтому заголовком X-Forwarded-For обходились и лимиты, и баны.
+    // TRUST_PROXY_HOPS — сколько своих прокси стоит перед приложением.
+    const hops = Math.max(1, parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
+    const chain = String(req.headers['x-forwarded-for']).split(',').map(v => v.trim()).filter(Boolean);
+    if (chain.length) ip = chain[Math.max(0, chain.length - hops)];
+  }
+  if (!ip) {
     ip = (req.connection && req.connection.remoteAddress) || (req.socket && req.socket.remoteAddress) || '';
   }
   return String(ip).replace(/^::ffff:/, '');
@@ -592,6 +840,162 @@ function logAction(userType, userName, action, details, slotId, ip, userAgent) {
     if (!enabled || enabled.value !== '1') return;
     db.prepare('INSERT INTO user_logs (user_type, user_name, action, details, slot_id, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)').run(userType || '', userName || '', action || '', details || '', slotId || 0, ip || '', userAgent || '');
   } catch (e) {}
+}
+
+// ---------------------------------------------------------------------------
+// Секреты в настройках
+// ---------------------------------------------------------------------------
+// Пароли и ключи внешних систем больше не возвращаются в кабинет открытым
+// текстом: отдаётся только признак «задано». При сохранении пустое значение
+// означает «оставить прежнее», а слово-маркер очищает поле.
+const SECRET_PLACEHOLDER = 'задано';
+
+function secretState(key) {
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    return !!(row && row.value);
+  } catch (e) { return false; }
+}
+
+// Возвращает значение, которое нужно записать, либо null — «не трогать».
+function resolveSecretUpdate(incoming, key) {
+  if (incoming === undefined || incoming === null) return null;
+  const v = String(incoming);
+  if (v === SECRET_PLACEHOLDER) return null;   // пришло то же, что показали
+  if (v === '') return null;                   // пусто — прежнее значение сохраняется
+  if (v === '-' || v === '—') return '';       // явная очистка
+  return v;
+}
+
+function writeSecret(key, incoming) {
+  const next = resolveSecretUpdate(incoming, key);
+  if (next === null) return false;
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, next);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Права доступа по разделам
+// ---------------------------------------------------------------------------
+// Для каждой роли и каждого раздела задаётся уровень: нет доступа / чтение /
+// чтение и запись. Администратор всегда имеет полный доступ. Проверка идёт по
+// адресу запроса: GET — это чтение, остальные методы — запись.
+const PERMISSION_SECTIONS = [
+  { key: 'orders',         label: 'Заказы',                          roles: ['manager'], paths: ['/api/manager/slots', '/api/manager/verify-pin'] },
+  { key: 'stats',          label: 'Статистика',                      roles: ['manager'], paths: ['/api/manager/stats', '/api/manager/stats/devices', '/api/manager/stats/orders', '/api/manager/stats/timeseries'] },
+  { key: 'skstats',        label: 'Статистика сотрудников склада',   roles: ['manager'], paths: ['/api/manager/stats/storekeepers'] },
+  { key: 'storekeepers',   label: 'Кладовщики',                      roles: ['manager'], paths: ['/api/manager/storekeepers'] },
+  { key: 'warehouses',     label: 'Склады',                          roles: ['manager'], paths: ['/api/manager/warehouses'] },
+  { key: 'nomenclature',   label: 'Номенклатура',                    roles: ['manager'], paths: ['/api/manager/nomenclature', '/api/manager/categories'] },
+  { key: 'messages',       label: 'Сообщения',                       roles: ['manager'], paths: ['/api/manager/messages'] },
+  { key: 'c1orders',       label: 'Заказы 1С',                       roles: ['manager'], paths: ['/api/manager/orders-1c', '/api/manager/c1-orders', '/api/manager/check-logs'] },
+  { key: 'counterparties', label: 'Контрагенты',                     roles: ['manager'], paths: ['/api/manager/counterparties'] },
+  { key: 'c1users',        label: 'Пользователи 1С',                 roles: ['manager'], paths: ['/api/manager/managers-1c', '/api/manager/engineers-1c'] },
+  { key: 'drivers',        label: 'Водители',                        roles: ['manager'], paths: ['/api/manager/drivers'], sensitive: true },
+  { key: 'journal',        label: 'Журнал действий',                 roles: ['manager'], paths: ['/api/manager/logs'], sensitive: true },
+  { key: 'bannedphones',   label: 'Забаненные телефоны',             roles: ['manager'], paths: ['/api/manager/banned-phones'] },
+  { key: 'bannedips',      label: 'Забаненные IP',                   roles: ['manager'], paths: ['/api/manager/banned-ips'] },
+  { key: 'vehicleclasses', label: 'Классы машин, виды загрузки, логисты', roles: ['manager'], paths: ['/api/manager/vehicle-classes', '/api/manager/load-types', '/api/manager/logisticians'] },
+  { key: 'managers',       label: 'Менеджеры',                       roles: [], adminOnly: true, paths: ['/api/manager/list', '/api/manager/create'] },
+  { key: 'settings',       label: 'Настройки',                       roles: [], adminOnly: true, paths: ['/api/manager/settings', '/api/manager/networks', '/api/manager/backup', '/api/manager/backups', '/api/manager/restore', '/api/manager/migrate', '/api/manager/switch', '/api/manager/update', '/api/manager/check-update', '/api/manager/migration', '/api/manager/about'] },
+  { key: 'skcabinet',      label: 'Кабинет кладовщика (сборка и выдача)', roles: ['storekeeper'], paths: ['/api/storekeeper'] }
+];
+const PERMISSION_ROLES = [
+  { key: 'manager',     label: 'Менеджер' },
+  { key: 'storekeeper', label: 'Кладовщик' }
+];
+const PERMISSION_LEVELS = ['none', 'read', 'write'];
+// Маршруты, доступные всегда: без них нельзя войти, выйти и сменить пароль.
+const PERMISSION_ALWAYS = ['/api/manager/login', '/api/manager/logout', '/api/manager/me', '/api/manager/password'];
+
+// По умолчанию всё разрешено — то же поведение, что было до появления
+// настройки. Ограничения администратор расставляет сам.
+function defaultPermissions() {
+  const out = {};
+  PERMISSION_ROLES.forEach(function (r) {
+    out[r.key] = {};
+    PERMISSION_SECTIONS.forEach(function (sec) {
+      if (sec.roles.indexOf(r.key) !== -1) out[r.key][sec.key] = 'write';
+    });
+  });
+  return out;
+}
+
+function getPermissions() {
+  const base = defaultPermissions();
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'permissions'").get();
+    if (row && row.value) {
+      const saved = JSON.parse(row.value);
+      Object.keys(base).forEach(function (role) {
+        if (!saved[role]) return;
+        Object.keys(base[role]).forEach(function (sec) {
+          if (PERMISSION_LEVELS.indexOf(saved[role][sec]) !== -1) base[role][sec] = saved[role][sec];
+        });
+      });
+    }
+  } catch (e) {}
+  return base;
+}
+
+function savePermissions(input) {
+  const base = defaultPermissions();
+  Object.keys(base).forEach(function (role) {
+    Object.keys(base[role]).forEach(function (sec) {
+      const v = input && input[role] ? input[role][sec] : undefined;
+      if (PERMISSION_LEVELS.indexOf(v) !== -1) base[role][sec] = v;
+    });
+  });
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('permissions', ?)").run(JSON.stringify(base));
+  redisFlushByPrefix('manager-me');
+  return base;
+}
+
+// Раздел, к которому относится адрес запроса. Побеждает самое длинное
+// совпадение, иначе /api/manager/stats перехватывал бы stats/storekeepers.
+function sectionForPath(pathname) {
+  let best = null, bestLen = -1;
+  PERMISSION_SECTIONS.forEach(function (sec) {
+    sec.paths.forEach(function (prefix) {
+      if (pathname === prefix || pathname.indexOf(prefix + '/') === 0) {
+        if (prefix.length > bestLen) { bestLen = prefix.length; best = sec; }
+      }
+    });
+  });
+  return best;
+}
+
+function levelAllows(level, needWrite) {
+  if (level === 'write') return true;
+  if (level === 'read') return !needWrite;
+  return false;
+}
+
+// Проверка прав на каждый запрос к кабинету и к кабинету кладовщика.
+function enforcePermissions(req, res, next) {
+  const pathname = req.path || '';
+  if (PERMISSION_ALWAYS.indexOf(pathname) !== -1) return next();
+  const isStorekeeperArea = pathname.indexOf('/api/storekeeper') === 0;
+  // Кабинет менеджера: неавторизованных отсекает requireManager дальше по цепочке.
+  if (!isStorekeeperArea && (!req.session || !req.session.managerId)) return next();
+  // Администратору доступно всё.
+  if (!isStorekeeperArea && isAdminManager(req)) return next();
+  const sec = sectionForPath(pathname);
+  if (!sec) return next();
+  const role = isStorekeeperArea ? 'storekeeper' : 'manager';
+  if (sec.roles.indexOf(role) === -1) {
+    if (sec.adminOnly) return next(); // такие разделы закрывает requireAdmin
+    return next();
+  }
+  const perms = getPermissions();
+  const level = (perms[role] && perms[role][sec.key]) || 'none';
+  const needWrite = ['GET', 'HEAD', 'OPTIONS'].indexOf(req.method) === -1;
+  if (levelAllows(level, needWrite)) return next();
+  return res.status(403).json({
+    error: level === 'none'
+      ? 'Нет доступа к разделу «' + sec.label + '»'
+      : 'Раздел «' + sec.label + '» доступен только для просмотра'
+  });
 }
 
 function requireManager(req, res, next) {
@@ -987,6 +1391,9 @@ app.get('/api/slots', async (req, res) => {
   if (!['small', 'bulk'].includes(type)) {
     return res.status(400).json({ error: 'type must be small or bulk' });
   }
+  if (!validSlotDate(date)) {
+    return res.status(400).json({ error: 'Некорректная дата' });
+  }
   // Weekends are closed unless the "work on weekends" setting is enabled.
   if (!isWeekday(date) && !worksOnWeekends()) {
     return res.json({ slots: [], weekday: false });
@@ -1001,7 +1408,7 @@ app.get('/api/slots', async (req, res) => {
     try { slots = JSON.parse(cached); } catch (e) { slots = null; }
   }
   if (!slots) {
-    ensureSlotsExist(date, type);
+    if (canGenerateSlots(date)) ensureSlotsExist(date, type);
     slots = db.prepare(
       'SELECT id, date, type, time_start, time_end, is_booked, confirmed, in_progress, completed, assembling, warehouse_id FROM slots WHERE date = ? AND type = ? AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL)) ORDER BY time_start'
     ).all(date, type, whId, whId);
@@ -1358,21 +1765,52 @@ app.post('/api/manager/login', (req, res) => {
   if (!username || !password) {
     return res.status(400).json({ error: 'username and password are required' });
   }
-  const hash = crypto.createHash('sha256').update(password).digest('hex');
-  const manager = db.prepare('SELECT * FROM managers WHERE username = ? AND password_hash = ?').get(username, hash);
-  if (!manager) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+  // Перебор пароля: после серии неудач пара «IP + логин» временно блокируется.
+  const key = loginKey(req);
+  const blockedMs = loginBlockedFor(key);
+  if (blockedMs > 0) {
+    return res.status(429).json({
+      error: 'Слишком много неудачных попыток входа. Повторите через ' + Math.ceil(blockedMs / 60000) + ' мин.'
+    });
   }
-  req.session.managerId = manager.id;
-  req.session.username = manager.username;
-  req.session.firstName = manager.first_name;
-  req.session.lastName = manager.last_name;
-  res.json({ success: true, id: manager.id, username: manager.username, firstName: manager.first_name, lastName: manager.last_name, isAdmin: !!(manager.is_admin === 1 || manager.is_admin === '1' || manager.is_admin === true) });
+  const manager = db.prepare('SELECT * FROM managers WHERE username = ?').get(String(username));
+  const verdict = manager ? verifyPassword(password, manager.password_hash) : false;
+  if (!manager || !verdict) {
+    loginRegisterFail(key);
+    try {
+      logAction('manager', String(username).slice(0, 64), 'Неудачная попытка входа',
+        'IP: ' + (getIp(req) || '-'), 0, getIp(req), getUserAgent(req));
+    } catch (e) {}
+    // Ровная задержка: убирает разницу во времени между «нет пользователя» и «неверный пароль».
+    return setTimeout(function () {
+      res.status(401).json({ error: 'Invalid credentials' });
+    }, 300);
+  }
+  loginFails.delete(key);
+  // Старый несолёный хеш незаметно переводим на scrypt.
+  if (verdict === 'rehash') {
+    try { db.prepare('UPDATE managers SET password_hash = ? WHERE id = ?').run(hashPassword(password), manager.id); } catch (e) {}
+  }
+  // Смена идентификатора сессии при входе — защита от session fixation:
+  // навязанный жертве до входа cookie перестаёт быть действительным.
+  req.session.regenerate(function (err) {
+    if (err) return res.status(500).json({ error: 'Ошибка создания сессии' });
+    req.session.managerId = manager.id;
+    req.session.username = manager.username;
+    req.session.firstName = manager.first_name;
+    req.session.lastName = manager.last_name;
+    req.session.save(function () {
+      res.json({ success: true, id: manager.id, username: manager.username, firstName: manager.first_name, lastName: manager.last_name, isAdmin: !!(manager.is_admin === 1 || manager.is_admin === '1' || manager.is_admin === true) });
+    });
+  });
 });
 
 app.post('/api/manager/logout', requireManager, (req, res) => {
-  req.session.destroy();
-  res.json({ success: true });
+  req.session.destroy(function (err) {
+    res.clearCookie('wq.sid', { httpOnly: true, sameSite: 'lax', secure: process.env.COOKIE_SECURE === '1' });
+    if (err) return res.status(500).json({ error: 'Ошибка выхода' });
+    res.json({ success: true });
+  });
 });
 
 app.get('/api/manager/me', requireManager, async (req, res) => {
@@ -1381,8 +1819,17 @@ app.get('/api/manager/me', requireManager, async (req, res) => {
   if (cached) return res.json(JSON.parse(cached));
   const mgr = db.prepare('SELECT * FROM managers WHERE id = ?').get(req.session.managerId);
   const warehouseIds = String(mgr.warehouse_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
-  const response = { id: mgr.id, username: mgr.username, firstName: mgr.first_name, lastName: mgr.last_name, warehouseId: mgr.warehouse_id, warehouseIds: warehouseIds, isAdmin: !!(mgr.is_admin === 1 || mgr.is_admin === '1' || mgr.is_admin === true) };
-  redisSet(cacheKey, JSON.stringify(response), 300);
+  const isAdmin = !!(mgr.is_admin === 1 || mgr.is_admin === '1' || mgr.is_admin === true);
+  // Права на разделы: интерфейс по ним прячет вкладки и кнопки изменения.
+  const perms = getPermissions();
+  const sections = {};
+  PERMISSION_SECTIONS.forEach(function (sec) {
+    if (sec.adminOnly) { sections[sec.key] = isAdmin ? 'write' : 'none'; return; }
+    if (sec.roles.indexOf('manager') === -1) return;
+    sections[sec.key] = isAdmin ? 'write' : ((perms.manager && perms.manager[sec.key]) || 'none');
+  });
+  const response = { id: mgr.id, username: mgr.username, firstName: mgr.first_name, lastName: mgr.last_name, warehouseId: mgr.warehouse_id, warehouseIds: warehouseIds, isAdmin: isAdmin, permissions: sections };
+  redisSet(cacheKey, JSON.stringify(response), 60);
   res.json(response);
 });
 
@@ -1577,12 +2024,16 @@ app.post('/api/manager/slots/:id/complete', requireManager, (req, res) => {
 /* ---------- 1C Integration ---------- */
 
 function require1cToken(req, res, next) {
-  const token = req.query.token || req.headers['x-api-token'];
+  // Токен принимается и в query — так его писали старые интеграции 1С, но
+  // тогда он попадает в логи nginx и в Referer. Заголовок предпочтителен;
+  // query-вариант можно отключить переменной ALLOW_1C_TOKEN_IN_QUERY=0.
+  const allowQueryToken = process.env.ALLOW_1C_TOKEN_IN_QUERY !== '0';
+  const token = req.headers['x-api-token'] || (allowQueryToken ? req.query.token : '');
   if (!token) {
     return res.status(401).json({ error: 'Token required' });
   }
   const stored = db.prepare("SELECT value FROM settings WHERE key = '1c_api_token'").get();
-  if (!stored || stored.value !== token) {
+  if (!stored || !stored.value || !safeEqual(stored.value, token)) {
     return res.status(403).json({ error: 'Invalid token' });
   }
   next();
@@ -1599,7 +2050,7 @@ app.get('/api/manager/settings/1c', requireManager, (req, res) => {
   const allowNoAccount = db.prepare("SELECT value FROM settings WHERE key = 'allow_booking_without_account'").get();
   const allowInvalid = db.prepare("SELECT value FROM settings WHERE key = 'allow_booking_with_invalid_account'").get();
   const warnMissing = db.prepare("SELECT value FROM settings WHERE key = 'warn_missing_account_at_booking'").get();
-  res.json({ token: token ? token.value : '', serverUrl: url ? url.value : '', username: user ? user.value : '', password: pass ? pass.value : '', orderValidationUrl: orderUrl ? orderUrl.value : '', paymentCheckUrl: payUrl ? payUrl.value : '', notes: notesVal ? notesVal.value : '', allowBookingWithoutAccount: allowNoAccount ? allowNoAccount.value : '1', allowBookingWithInvalidAccount: allowInvalid ? allowInvalid.value : '0', warnMissingAccountAtBooking: warnMissing ? warnMissing.value : '0' });
+  res.json({ token: token ? token.value : '', serverUrl: url ? url.value : '', username: user ? user.value : '', password: '', passwordSet: !!(pass && pass.value), orderValidationUrl: orderUrl ? orderUrl.value : '', paymentCheckUrl: payUrl ? payUrl.value : '', notes: notesVal ? notesVal.value : '', allowBookingWithoutAccount: allowNoAccount ? allowNoAccount.value : '1', allowBookingWithInvalidAccount: allowInvalid ? allowInvalid.value : '0', warnMissingAccountAtBooking: warnMissing ? warnMissing.value : '0' });
 });
 
 app.post('/api/manager/settings/1c/regenerate', requireManager, (req, res) => {
@@ -1625,7 +2076,8 @@ app.post('/api/manager/settings/1c/server-url', requireManager, (req, res) => {
 app.post('/api/manager/settings/1c/credentials', requireManager, (req, res) => {
   const { username, password } = req.body;
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('1c_username', ?)").run(username || '');
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('1c_password', ?)").run(password || '');
+  // Пустое поле означает «пароль не меняем» — иначе сохранение логина стирало бы пароль.
+  writeSecret('1c_password', password);
   redisFlushByPrefix('orders-1c');
   redisFlushByPrefix('managers-1c');
   redisFlushByPrefix('engineers-1c');
@@ -1635,8 +2087,8 @@ app.post('/api/manager/settings/1c/credentials', requireManager, (req, res) => {
 
 app.post('/api/manager/settings/1c/password', requireManager, (req, res) => {
   const { password } = req.body;
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('1c_password', ?)").run(password || '');
-  res.json({ success: true });
+  writeSecret('1c_password', password);
+  res.json({ success: true, passwordSet: secretState('1c_password') });
 });
 
 app.get('/api/manager/settings/timezone', requireManager, (req, res) => {
@@ -1677,6 +2129,28 @@ app.post('/api/manager/settings/booking-min-minutes', requireManager, (req, res)
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('booking_min_minutes', ?)").run(String(n));
   redisFlushSlotsCache();
   res.json({ success: true });
+});
+
+// Права доступа по разделам
+app.get('/api/manager/settings/permissions', requireManager, (req, res) => {
+  res.json({
+    roles: PERMISSION_ROLES,
+    sections: PERMISSION_SECTIONS.map(function (sec) {
+      return { key: sec.key, label: sec.label, roles: sec.roles, adminOnly: !!sec.adminOnly, sensitive: !!sec.sensitive };
+    }),
+    permissions: getPermissions()
+  });
+});
+
+app.post('/api/manager/settings/permissions', requireManager, (req, res) => {
+  try {
+    const saved = savePermissions(req.body && req.body.permissions);
+    logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка',
+      'Изменил права доступа по разделам', 0, getIp(req), getUserAgent(req));
+    res.json({ success: true, permissions: saved });
+  } catch (err) {
+    res.status(500).json({ error: 'Не удалось сохранить права: ' + err.message });
+  }
 });
 
 // Обязательность полей «Класс машины» и «Вид загрузки» при записи
@@ -1774,7 +2248,7 @@ app.post('/api/manager/settings/1c/test-order-validation', requireManager, async
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
   const body = JSON.stringify({ invoce_number: accounts });
-  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + password + ')';
+  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + (password ? '••••••' : 'не задан') + ')';
   const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${validationUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
@@ -1847,7 +2321,7 @@ app.post('/api/manager/settings/1c/test-payment-check', requireManager, async (r
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
   const body = JSON.stringify({ invoce_number: accounts });
-  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + password + ')';
+  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + (password ? '••••••' : 'не задан') + ')';
   const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${paymentCheckUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
@@ -1913,7 +2387,7 @@ app.post('/api/manager/settings/1c/test-ready-check', requireManager, async (req
   const username = userSetting ? userSetting.value : '';
   const password = passSetting ? passSetting.value : '';
   const body = JSON.stringify({ invoce_number: accounts });
-  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + password + ')';
+  const maskedAuth = 'Basic ' + Buffer.from(username + ':' + password).toString('base64') + '  (логин: ' + username + ', пароль: ' + (password ? '••••••' : 'не задан') + ')';
   const prettyBody = JSON.stringify({ invoce_number: accounts }, null, 2);
   const requestDescription = `POST ${readyCheckUrl}\nAuthorization: ${maskedAuth}\nContent-Type: application/json\n\n${prettyBody}`;
   try {
@@ -2094,15 +2568,6 @@ app.get('/api/manager/messages', requireManager, async (req, res) => {
   res.json(response);
 });
 
-app.use(function(err, req, res, next) {
-  console.error('Unhandled error:', err);
-  if (res.headersSent) return;
-  res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Warehouse Queue System running on http://0.0.0.0:${PORT}`);
-});
 
 function requireAllowedIP(req, res, next) {
   const rawIP = req.ip || req.connection.remoteAddress || '';
@@ -2240,8 +2705,10 @@ app.post('/api/manager/create', requireManager, (req, res) => {
   if (existing) {
     return res.status(409).json({ error: 'Username already exists' });
   }
+  const pwErr = validatePassword(password, username);
+  if (pwErr) return res.status(400).json({ error: pwErr });
   const ids = normalizeWarehouseIds(warehouseIds, warehouseId);
-  const hash = crypto.createHash('sha256').update(password).digest('hex');
+  const hash = hashPassword(password);
   db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name, warehouse_id, warehouse_ids, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?)').run(username, hash, firstName || '', lastName || '', ids.length ? Number(ids[0]) : null, ids.join(','), isAdmin ? 1 : 0);
   redisFlushByPrefix('list');
   res.json({ success: true });
@@ -2270,7 +2737,9 @@ app.put('/api/manager/:id', requireManager, requireAdmin, (req, res) => {
   let adminFlag = isAdmin ? 1 : 0;
   if (mgr.username === 'admin') adminFlag = 1;
   if (password) {
-    const hash = crypto.createHash('sha256').update(password).digest('hex');
+    const pwErr = validatePassword(password, username);
+    if (pwErr) return res.status(400).json({ error: pwErr });
+    const hash = hashPassword(password);
     db.prepare('UPDATE managers SET username = ?, password_hash = ?, first_name = ?, last_name = ?, warehouse_id = ?, warehouse_ids = ?, is_admin = ? WHERE id = ?').run(username, hash, firstName || '', lastName || '', whPrimary, whCsv, adminFlag, id);
   } else {
     db.prepare('UPDATE managers SET username = ?, first_name = ?, last_name = ?, warehouse_id = ?, warehouse_ids = ?, is_admin = ? WHERE id = ?').run(username, firstName || '', lastName || '', whPrimary, whCsv, adminFlag, id);
@@ -2897,31 +3366,29 @@ app.post('/api/manager/password', requireManager, (req, res) => {
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: 'Current and new password are required' });
   }
-  if (newPassword.length < 4) {
-    return res.status(400).json({ error: 'New password must be at least 4 characters' });
-  }
   const mgr = db.prepare('SELECT * FROM managers WHERE id = ?').get(req.session.managerId);
-  const currentHash = crypto.createHash('sha256').update(currentPassword).digest('hex');
-  if (currentHash !== mgr.password_hash) {
+  if (!mgr) return res.status(401).json({ error: 'Unauthorized' });
+  const pwErr = validatePassword(newPassword, mgr.username);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  if (!verifyPassword(currentPassword, mgr.password_hash)) {
     return res.status(403).json({ error: 'Current password is incorrect' });
   }
-  const newHash = crypto.createHash('sha256').update(newPassword).digest('hex');
-  db.prepare('UPDATE managers SET password_hash = ? WHERE id = ?').run(newHash, req.session.managerId);
+  db.prepare('UPDATE managers SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), req.session.managerId);
   redisFlushByPrefix('manager-me');
+  try { logAction('manager', mgr.username, 'Смена пароля', '', 0, getIp(req), getUserAgent(req)); } catch (e) {}
   res.json({ success: true });
 });
 
 /* ---------- SMS Settings ---------- */
 
 app.get('/api/manager/settings/smsru', requireManager, (req, res) => {
-  const setting = db.prepare("SELECT value FROM settings WHERE key = 'smsru_api_key'").get();
-  res.json({ apiKey: setting ? setting.value : '' });
+  res.json({ apiKey: '', apiKeySet: secretState('smsru_api_key') });
 });
 
 app.post('/api/manager/settings/smsru', requireManager, (req, res) => {
   const { apiKey } = req.body;
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('smsru_api_key', ?)").run(apiKey || '');
-  res.json({ success: true });
+  writeSecret('smsru_api_key', apiKey);
+  res.json({ success: true, apiKeySet: secretState('smsru_api_key') });
 });
 
 /* ---------- Journal ---------- */
@@ -3072,7 +3539,15 @@ function detectBrowser(ua) {
   return 'Прочее';
 }
 
+const visitSeen = new Map();
 app.post('/api/visit', (req, res) => {
+  // Одна отметка с адреса в минуту: раньше публичный маршрут позволял
+  // забить таблицу посещений неограниченным числом строк.
+  const vip = getIp(req) || 'unknown';
+  const vnow = Date.now();
+  if (vnow - (visitSeen.get(vip) || 0) < 60000) return res.json({ ok: true });
+  if (visitSeen.size > 50000) visitSeen.clear();
+  visitSeen.set(vip, vnow);
   try {
     const ua = getUserAgent(req);
     db.prepare('INSERT INTO page_visits (visited_at, ip, device, os, browser) VALUES (?, ?, ?, ?, ?)')
@@ -3226,9 +3701,16 @@ function restoreFromDump(dump) {
       if (!Array.isArray(dump.tables[t])) continue;
       db.prepare('DELETE FROM "' + t + '"').run();
       for (const row of dump.tables[t]) {
-        const cols = Object.keys(row);
+        // Имена колонок берутся из загруженного файла и попадают прямо в SQL,
+        // поэтому пропускаем только те, что реально есть в таблице, и
+        // экранируем кавычки — иначе подготовленный файл копии выполнял
+        // произвольный SQL (на PostgreSQL — вплоть до команд ОС).
+        const known = tableColumns(t);
+        const cols = Object.keys(row).filter(function (c) {
+          return /^[A-Za-z_][A-Za-z0-9_]*$/.test(c) && (!known.size || known.has(c));
+        });
         if (!cols.length) continue;
-        const colList = cols.map(c => '"' + c + '"').join(', ');
+        const colList = cols.map(c => '"' + c.replace(/"/g, '""') + '"').join(', ');
         const placeholders = cols.map(() => '?').join(', ');
         db.prepare('INSERT INTO "' + t + '" (' + colList + ') VALUES (' + placeholders + ')').run.apply(null, cols.map(c => row[c]));
         rowCount++;
@@ -3248,6 +3730,21 @@ function restoreFromDump(dump) {
   loadTtlOverrides();
   redisFlushAll();
   return rowCount;
+}
+
+// Список колонок таблицы — белый список для восстановления из копии.
+function tableColumns(table) {
+  const set = new Set();
+  try {
+    if (dbAdapter.getType() === 'postgresql') {
+      const rows = db.prepare('SELECT column_name FROM information_schema.columns WHERE table_name = ?').all(table) || [];
+      rows.forEach(function (r) { if (r && r.column_name) set.add(r.column_name); });
+    } else {
+      const rows = sqliteDb.prepare("PRAGMA table_info('" + String(table).replace(/[^A-Za-z0-9_]/g, '') + "')").all() || [];
+      rows.forEach(function (r) { if (r && r.name) set.add(r.name); });
+    }
+  } catch (e) {}
+  return set;
 }
 
 function safeBackupName(name) {
@@ -3512,14 +4009,14 @@ app.post('/api/manager/settings/logo/reset', requireManager, (req, res) => {
 
 app.get('/api/manager/settings/redis', requireManager, (req, res) => {
   const config = getRedisConfig();
-  res.json({ ...config, status: getRedisStatus() });
+  res.json({ ...config, password: '', passwordSet: secretState('redis_password'), status: getRedisStatus() });
 });
 
 app.post('/api/manager/settings/redis', requireManager, (req, res) => {
   const { host, port, password, db: redisDb, enabled } = req.body;
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('redis_host', ?)").run(host || '127.0.0.1');
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('redis_port', ?)").run(String(port || 6379));
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('redis_password', ?)").run(password || '');
+  writeSecret('redis_password', password);
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('redis_db', ?)").run(String(redisDb || 0));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('redis_enabled', ?)").run(enabled ? '1' : '0');
   initRedis();
@@ -3921,7 +4418,7 @@ function requireExtApi(req, res, next) {
   }
   const key = extApiKey();
   const header = req.headers['x-api-key'] || String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
-  if (!key || !header || header !== key) {
+  if (!key || !header || !safeEqual(header, key)) {
     return res.status(401).json({ error: 'Неверный API-ключ' });
   }
   next();
@@ -3951,8 +4448,9 @@ app.get('/api/ext/v1/slots', requireExtApi, (req, res) => {
   const { date, type, warehouse_id } = req.query;
   if (!date || !type) return res.status(400).json({ error: 'Параметры date и type обязательны' });
   if (!['small', 'bulk'].includes(type)) return res.status(400).json({ error: 'type: small или bulk' });
+  if (!validSlotDate(date)) return res.status(400).json({ error: 'Некорректная дата' });
   if (!isWeekday(date) && !worksOnWeekends()) return res.json({ slots: [], weekday: false });
-  ensureSlotsExist(date, type);
+  if (canGenerateSlots(date)) ensureSlotsExist(date, type);
   const whId = warehouse_id || null;
   const slots = db.prepare(
     'SELECT id, date, type, time_start, time_end, is_booked, confirmed, in_progress, completed, assembling, warehouse_id FROM slots WHERE date = ? AND type = ? AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL)) ORDER BY time_start'
@@ -4371,7 +4869,7 @@ app.get('/api/manager/migration/status', requireManager, function(req, res) {
       path: path.resolve(__dirname, 'warehouse.db'),
       tables: sqliteDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().length
     },
-    pgsql: getPgSqlConfig()
+    pgsql: Object.assign({}, getPgSqlConfig(), { password: '', passwordSet: secretState('pgsql_password') })
   };
   try {
     var stat = fs.statSync(info.sqlite.path);
@@ -4417,7 +4915,7 @@ app.post('/api/manager/settings/pgsql', requireManager, function(req, res) {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pgsql_port', ?)").run(String(port || 5432));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pgsql_database', ?)").run(database || 'warehouse');
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pgsql_user', ?)").run(user || 'postgres');
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pgsql_password', ?)").run(password || '');
+  writeSecret('pgsql_password', password);
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', 'Сохранил настройки PostgreSQL', 0, getIp(req), getUserAgent(req));
   res.json({ success: true });
 });
@@ -4545,3 +5043,44 @@ app.post('/api/manager/switch/to-sqlite', requireManager, function(req, res) {
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Настройка', 'Переключил БД на SQLite', 0, getIp(req), getUserAgent(req));
   res.json({ success: true });
 });
+
+// ---------------------------------------------------------------------------
+// Обработчик ошибок и запуск сервера — строго в конце файла.
+// Express передаёт ошибку только тем обработчикам, что объявлены НИЖЕ упавшего
+// маршрута. Раньше этот блок стоял в середине, и ошибки всех маршрутов ниже
+// уходили в стандартный обработчик Express, который в режиме разработки
+// отдаёт клиенту стек вызовов и текст SQL-запроса.
+// ---------------------------------------------------------------------------
+app.use('/api', function (req, res) {
+  res.status(404).json({ error: 'Метод не найден' });
+});
+
+app.use(function (err, req, res, next) {
+  const status = err && err.status ? err.status : 500;
+  if (status === 413) {
+    return res.status(413).json({ error: 'Слишком большой объём данных' });
+  }
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Некорректный JSON в запросе' });
+  }
+  console.error('Unhandled error:', err && err.stack ? err.stack : err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+});
+
+const httpServer = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Warehouse Queue System running on http://0.0.0.0:${PORT}`);
+});
+
+// Корректное завершение: даём доработать текущим запросам, чтобы перезапуск
+// при обновлении не рвал соединения на полуслове.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('Получен ' + signal + ' — завершаю работу...');
+  httpServer.close(function () { process.exit(0); });
+  setTimeout(function () { process.exit(0); }, 10000).unref();
+}
+process.on('SIGTERM', function () { shutdown('SIGTERM'); });
+process.on('SIGINT', function () { shutdown('SIGINT'); });

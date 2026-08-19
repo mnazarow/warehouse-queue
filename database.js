@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'warehouse.db');
 
@@ -9,6 +10,7 @@ let db;
 function initDatabase() {
   db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 5000');
   db.pragma('foreign_keys = ON');
 
   db.exec(`
@@ -433,11 +435,48 @@ function initDatabase() {
     db.exec("ALTER TABLE slots ADD COLUMN load_type_id INTEGER DEFAULT NULL");
   }
 
+  // Индексы под самые частые выборки. Без них публичное расписание и вкладка
+  // «Водители» сканируют таблицу слотов целиком — с ростом базы это само по
+  // себе кладёт сервер, без всякой атаки.
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_slots_date_type_wh ON slots(date, type, warehouse_id);
+      CREATE INDEX IF NOT EXISTS idx_slots_phone        ON slots(customer_phone);
+      CREATE INDEX IF NOT EXISTS idx_slots_ip_booked    ON slots(customer_ip, is_booked);
+      CREATE INDEX IF NOT EXISTS idx_slots_booked_at    ON slots(booked_at);
+      CREATE INDEX IF NOT EXISTS idx_slots_wh_status    ON slots(warehouse_id, is_booked, completed);
+      CREATE INDEX IF NOT EXISTS idx_banned_ips_ip      ON banned_ips(ip);
+      CREATE INDEX IF NOT EXISTS idx_banned_phones_ph   ON banned_phones(phone);
+      CREATE INDEX IF NOT EXISTS idx_user_logs_created  ON user_logs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_page_visits_at     ON page_visits(visited_at);
+      CREATE INDEX IF NOT EXISTS idx_booking_events_at  ON booking_events(created_at);
+    `);
+  } catch (e) { console.error('Не удалось создать индексы:', e.message); }
+
   const existing = db.prepare('SELECT COUNT(*) as cnt FROM managers').get();
   if (existing.cnt === 0) {
-    const hash = crypto.createHash('sha256').update('admin123').digest('hex');
+    // Пароль главного администратора больше не захардкожен: он генерируется
+    // при первом запуске и кладётся в файл рядом с базой (права 0600).
+    // Раньше здесь был общеизвестный admin/admin123 — вход в кабинет любой
+    // свежей установки открывался с первой попытки.
+    const password = process.env.ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64url');
+    const salt = crypto.randomBytes(16);
+    const dk = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1, maxmem: 96 * 1024 * 1024 });
+    const hash = 'scrypt$16384$8$1$' + salt.toString('hex') + '$' + dk.toString('hex');
     db.prepare('INSERT INTO managers (username, password_hash, first_name, last_name, is_admin) VALUES (?, ?, ?, ?, 1)').run('admin', hash, 'Главный', 'Администратор');
-    console.log('Default manager created: admin / admin123');
+    if (!process.env.ADMIN_PASSWORD) {
+      const file = path.join(__dirname, 'ADMIN-PASSWORD.txt');
+      const text = 'Логин: admin\nПароль: ' + password + '\n\n' +
+        'Войдите в кабинет, смените пароль и удалите этот файл.\n';
+      try {
+        fs.writeFileSync(file, text, { mode: 0o600 });
+        console.log('Создан администратор admin. Пароль записан в файл ADMIN-PASSWORD.txt');
+      } catch (e) {
+        console.log('Создан администратор admin. Пароль: ' + password + ' (сохраните его)');
+      }
+    } else {
+      console.log('Создан администратор admin с паролем из ADMIN_PASSWORD');
+    }
   }
 
   // Разовый перенос истории бронирований в booking_events: пока журнал пуст,

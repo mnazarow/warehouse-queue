@@ -1,29 +1,14 @@
-# Dependencies
-node_modules/
-
-# Secrets / environment
+# Секреты и локальные файлы (не должны попадать в репозиторий)
+.session-secret
+ADMIN-PASSWORD.txt
 .env
-*.env
-!.env.example
-
-# Local databases (contain real data, password hashes, tokens — never commit)
 warehouse.db
 warehouse.db-wal
 warehouse.db-shm
-*.sqlite
-*.sqlite3
-data/
+server.log
 backups/
+node_modules/
 
-# Logs / runtime
-*.log
-npm-debug.log*
-
-# OS / editor
+# Служебные файлы macOS
 .DS_Store
-Thumbs.db
-.idea/
-.vscode/
-
-# TLS / certbot artifacts (if mounted locally)
-deploy/letsencrypt/
+**/.DS_Store
