@@ -130,6 +130,10 @@ function initDatabase() {
   if (!colCheck.some(c => c.name === 'customer_organization')) {
     db.exec("ALTER TABLE slots ADD COLUMN customer_organization TEXT");
   }
+  // Соответствие «счёт → организация» из 1С на момент записи (JSON).
+  if (!colCheck.some(c => c.name === 'customer_account_orgs')) {
+    db.exec("ALTER TABLE slots ADD COLUMN customer_account_orgs TEXT DEFAULT ''");
+  }
 
   const skColCheck = db.prepare("PRAGMA table_info('storekeepers')").all();
   if (!skColCheck.some(c => c.name === 'pin_code')) {

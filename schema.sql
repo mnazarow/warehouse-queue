@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS slots (
   warehouse_id INTEGER,
   customer_name TEXT, customer_phone TEXT, customer_account TEXT,
   customer_comment TEXT, customer_organization TEXT,
+  customer_account_orgs TEXT DEFAULT '',   -- счёт → организация из 1С (JSON)
   storekeeper_name TEXT, storekeeper_id INTEGER,
   booked_at TEXT, confirmed_at TEXT, in_progress_at TEXT,
   assembling_at TEXT, completed_at TEXT,

@@ -63,6 +63,71 @@ function slotInstantMs(date, timeStart, warehouseId) {
   return ms - off * 3600000;
 }
 
+// ---------------------------------------------------------------------------
+// Отметки времени в заявках
+// ---------------------------------------------------------------------------
+// Раньше отметки писались как datetime('now'): в SQLite это UTC, в PostgreSQL —
+// CURRENT_TIMESTAMP в поясе сервера. В кабинете значение выводилось как есть,
+// поэтому колонки «Заявка» и «Подтв.» показывали время на несколько часов
+// раньше реального. Теперь отметка формируется в приложении строго в UTC
+// (одинаково для обеих СУБД), а в кабинет отдаётся уже переведённой в пояс
+// склада.
+function nowStampUtc() {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
+
+// Разбор сохранённой отметки. Значения без указания пояса считаются UTC —
+// так их пишет и SQLite, и наш собственный nowStampUtc(). Если на сервере
+// отметки исторически сохранялись в местном времени, поведение переключается
+// переменной окружения DB_TIMESTAMPS_LOCAL=1.
+function parseStampMs(value) {
+  if (!value) return NaN;
+  const str = String(value).trim();
+  if (!str) return NaN;
+  // PostgreSQL печатает смещение двумя цифрами («+03»), поэтому минуты
+  // необязательны. Пробел на 'T' в этой ветке НЕ меняем: Date.parse не
+  // разбирает «2026-09-03T09:15:00.123456+03», а вариант с пробелом — да.
+  if (/[zZ]$|[+-]\d{2}(:?\d{2})?$/.test(str)) return Date.parse(str);
+  const norm = str.replace(' ', 'T').slice(0, 19);
+  if (process.env.DB_TIMESTAMPS_LOCAL === '1') {
+    // Разбираем как UTC и вычитаем смещение склада — иначе результат зависел бы
+    // от часового пояса самого процесса (TZ), а не от пояса, в котором писались
+    // отметки.
+    return Date.parse(norm + 'Z') - appTzOffsetHours() * 3600000;
+  }
+  return Date.parse(norm + 'Z');
+}
+
+// «2026-09-03 06:15» по времени склада. Пустое значение остаётся пустым.
+function stampToLocal(value, tzOffsetHours) {
+  const ms = parseStampMs(value);
+  if (!Number.isFinite(ms)) return value || '';
+  const off = Number.isFinite(tzOffsetHours) ? tzOffsetHours : appTzOffsetHours();
+  return new Date(ms + off * 3600000).toISOString().slice(0, 16).replace('T', ' ');
+}
+
+// Организация в заявке. Данные 1С считаем достоверными: если клиент указал
+// другое название (или не указал), оно заменяется значением из 1С. Когда счета
+// принадлежат разным юрлицам — перечисляются все.
+function organizationFrom1C(typedOrg, result) {
+  const orgs = (result && Array.isArray(result.organizations)) ? result.organizations.filter(Boolean) : [];
+  if (!orgs.length) return { organization: typedOrg || null, replaced: false };
+  const joined = orgs.join(', ');
+  const typed = String(typedOrg || '').trim();
+  const same = typed && orgs.length === 1 && typed.toLowerCase() === orgs[0].toLowerCase();
+  return { organization: joined, replaced: !!typed && !same, organizations: orgs };
+}
+
+// Соответствие «счёт → организация» сохраняется в заявке, чтобы кабинет мог
+// показать счета сгруппированными по юрлицам даже после изменений в 1С.
+function accountOrgsToJson(accounts, result) {
+  const map = (result && result.accountOrgs) ? result.accountOrgs : null;
+  if (!map) return null;
+  const out = {};
+  accounts.forEach(function (a) { if (map[a]) out[a] = map[a]; });
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
+
 // Дата слота: строгий формат и разумный диапазон. Без этой проверки публичный
 // запрос /api/slots?date=... заставлял сервер создавать окна на любую дату
 // (перебором дат база раздувалась до миллионов строк).
@@ -672,6 +737,11 @@ function ensureFeatureSchema() {
       ['address', 'directions', 'map_scheme', 'route_moscow', 'tz_offset'].forEach(function(c) {
         try { db.exec("ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS " + c + " TEXT DEFAULT ''"); } catch (e) {}
       });
+      // Соответствие «счёт → организация» на момент записи (JSON).
+      // Если ALTER не пройдёт (нет прав), запись брони начнёт падать — поэтому
+      // ошибку пишем в лог, а не проглатываем.
+      try { db.exec("ALTER TABLE slots ADD COLUMN IF NOT EXISTS customer_account_orgs TEXT DEFAULT ''"); }
+      catch (e) { console.error('ensureFeatureSchema: customer_account_orgs:', e.message); }
       try { db.exec("ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS is_default INTEGER DEFAULT 0"); } catch (e) {}
     } else {
       // SQLite: обычно уже создано в initDatabase(); повтор безопасен и
@@ -683,7 +753,13 @@ function ensureFeatureSchema() {
         ['directions', 'map_scheme', 'route_moscow', 'tz_offset'].forEach(function(c) {
           if (wcols.indexOf(c) === -1) sqliteDb.exec("ALTER TABLE warehouses ADD COLUMN " + c + " TEXT DEFAULT ''");
         });
-      } catch (e) {}
+      } catch (e) { console.error('ensureFeatureSchema (warehouses):', e.message); }
+      try {
+        const scols = sqliteDb.prepare("PRAGMA table_info('slots')").all().map(function(c) { return c.name; });
+        if (scols.indexOf('customer_account_orgs') === -1) {
+          sqliteDb.exec("ALTER TABLE slots ADD COLUMN customer_account_orgs TEXT DEFAULT ''");
+        }
+      } catch (e) { console.error('ensureFeatureSchema (slots):', e.message); }
     }
     // Индексы под частые выборки — и для SQLite, и для PostgreSQL.
     // Синтаксис CREATE INDEX IF NOT EXISTS понимают обе СУБД.
@@ -1130,7 +1206,7 @@ function logisticianSmsSuffix() {
 
 function validateAccountsWith1C(accounts, validationUrl, username, password) {
   return new Promise((resolve) => {
-    if (!validationUrl || !accounts.length) { logCheck(accounts, validationUrl, true, 0, '', 'No URL or accounts', ''); resolve({ valid: true, invalidAccounts: [] }); return; }
+    if (!validationUrl || !accounts.length) { logCheck(accounts, validationUrl, true, 0, '', 'No URL or accounts', ''); resolve({ valid: true, invalidAccounts: [], accountOrgs: {}, organizations: [] }); return; }
     // Тело запроса объявлено вне try: иначе в catch ниже обращение к нему
     // выбрасывало ReferenceError (переменная вне области видимости),
     // и промис никогда не резолвился.
@@ -1165,6 +1241,13 @@ function validateAccountsWith1C(accounts, validationUrl, username, password) {
               });
               const ok = invalidAccounts.length === 0;
               let customerName = '';
+              // Организация по каждому счёту: в одной заявке счета могут
+              // принадлежать разным юрлицам, и кабинет показывает их отдельно.
+              const accountOrgs = {};
+              for (const k of resultKeys) {
+                const r = json.results[k];
+                if (r && r.customerName) accountOrgs[k] = String(r.customerName).trim();
+              }
               if (ok) {
                 for (const k of resultKeys) {
                   const r = json.results[k];
@@ -1192,22 +1275,32 @@ function validateAccountsWith1C(accounts, validationUrl, username, password) {
                 }
               }
               logCheck(accounts, validationUrl, ok, res.statusCode, resp, parsedStatus ? 'Parsed: ' + parsedStatus : '', reqBodyStr);
-              resolve({ valid: ok, invalidAccounts, customerName });
+              // organizations — уникальные названия в порядке появления счетов.
+              const organizations = [];
+              accounts.forEach(function (a) {
+                const nm = accountOrgs[a];
+                if (nm && organizations.indexOf(nm) === -1) organizations.push(nm);
+              });
+              Object.keys(accountOrgs).forEach(function (k) {
+                const nm = accountOrgs[k];
+                if (nm && organizations.indexOf(nm) === -1) organizations.push(nm);
+              });
+              resolve({ valid: ok, invalidAccounts, customerName, accountOrgs, organizations });
             } else {
               logCheck(accounts, validationUrl, false, res.statusCode, resp, 'No results field', reqBodyStr);
-              resolve({ valid: true, invalidAccounts: [] });
+              resolve({ valid: true, invalidAccounts: [], accountOrgs: {}, organizations: [] });
             }
           } catch {
             logCheck(accounts, validationUrl, false, res.statusCode, resp, 'Parse error', reqBodyStr);
-            resolve({ valid: true, invalidAccounts: [] });
+            resolve({ valid: true, invalidAccounts: [], accountOrgs: {}, organizations: [] });
           }
         });
       });
-      req.on('timeout', () => { req.destroy(); logCheck(accounts, validationUrl, false, 0, '', 'Timeout', reqBodyStr); resolve({ valid: true, invalidAccounts: [] }); });
-      req.on('error', (err) => { logCheck(accounts, validationUrl, false, 0, '', err.message, reqBodyStr); resolve({ valid: true, invalidAccounts: [] }); });
+      req.on('timeout', () => { req.destroy(); logCheck(accounts, validationUrl, false, 0, '', 'Timeout', reqBodyStr); resolve({ valid: true, invalidAccounts: [], accountOrgs: {}, organizations: [] }); });
+      req.on('error', (err) => { logCheck(accounts, validationUrl, false, 0, '', err.message, reqBodyStr); resolve({ valid: true, invalidAccounts: [], accountOrgs: {}, organizations: [] }); });
       req.write(reqBodyStr);
       req.end();
-    } catch (err) { logCheck(accounts, validationUrl, false, 0, '', err.message, reqBodyStr); resolve({ valid: true, invalidAccounts: [] }); }
+    } catch (err) { logCheck(accounts, validationUrl, false, 0, '', err.message, reqBodyStr); resolve({ valid: true, invalidAccounts: [], accountOrgs: {}, organizations: [] }); }
   });
 }
 
@@ -1462,6 +1555,8 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   const { id } = req.params;
   const { name: nameRaw, phone: phoneRaw, account, comment, organization: org, captchaAnswer, force, vehicleClassId, loadTypeId } = req.body;
   let organization = org;
+  let organizationReplaced = false;
+  let accountOrgsJson = null;
   if (!nameRaw || !phoneRaw) {
     return res.status(400).json({ error: 'name and phone are required' });
   }
@@ -1568,9 +1663,11 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
       const username = userSetting ? userSetting.value : '';
       const password = passSetting ? passSetting.value : '';
       const result = await validateAccountsWith1C(accounts, validationUrl, username, password);
-      if (!organization && result.customerName) {
-        organization = result.customerName;
-      }
+      // Организацию берём из 1С — она вернее того, что клиент набрал руками.
+      const orgInfo = organizationFrom1C(organization, result);
+      if (orgInfo.organization) organization = orgInfo.organization;
+      organizationReplaced = orgInfo.replaced;
+      accountOrgsJson = accountOrgsToJson(accounts, result);
       if (!result.valid) {
         const allowInvalidSetting = db.prepare("SELECT value FROM settings WHERE key = 'allow_booking_with_invalid_account'").get();
         const allowInvalid = allowInvalidSetting ? allowInvalidSetting.value === '1' : false;
@@ -1631,17 +1728,17 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   // Conditional update guards against the double-booking race: only one
   // concurrent request can flip is_booked 0 -> 1.
   const bookInfo = db.prepare(
-    "UPDATE slots SET is_booked = 1, customer_name = ?, customer_phone = ?, customer_account = ?, customer_comment = ?, customer_organization = ?, booked_at = datetime('now'), customer_ip = ?, customer_user_agent = ?, vehicle_class_id = ?, load_type_id = ? WHERE id = ? AND is_booked = 0"
-  ).run(name, phone, account || null, comment || null, organization || null, getIp(req), getUserAgent(req), vehicleClassId || null, loadTypeId || null, id);
+    "UPDATE slots SET is_booked = 1, customer_name = ?, customer_phone = ?, customer_account = ?, customer_comment = ?, customer_organization = ?, customer_account_orgs = ?, booked_at = ?, customer_ip = ?, customer_user_agent = ?, vehicle_class_id = ?, load_type_id = ? WHERE id = ? AND is_booked = 0"
+  ).run(name, phone, account || null, comment || null, organization || null, accountOrgsJson, nowStampUtc(), getIp(req), getUserAgent(req), vehicleClassId || null, loadTypeId || null, id);
   if (!bookInfo || bookInfo.changes === 0) {
     return res.status(409).json({ error: 'Slot already booked' });
   }
   if (autoConfirmSlot) {
-    db.prepare("UPDATE slots SET confirmed = 1, confirmed_at = datetime('now') WHERE id = ?").run(id);
+    db.prepare("UPDATE slots SET confirmed = 1, confirmed_at = ? WHERE id = ?").run(nowStampUtc(), id);
   }
   // Событие для графика «Бронирования»: живёт отдельно от слота,
   // не пропадает при отмене брони.
-  try { db.prepare("INSERT INTO booking_events (slot_id, created_at) VALUES (?, datetime('now'))").run(Number(id)); } catch (e) {}
+  try { db.prepare('INSERT INTO booking_events (slot_id, created_at) VALUES (?, ?)').run(Number(id), nowStampUtc()); } catch (e) {}
   logAction('client', name + ' (' + phone + ')', 'Бронирование', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date + (account ? ', счета: ' + account.replace(/\n/g, ', ') : ''), Number(id), getIp(req), getUserAgent(req));
   const whName = slot.warehouse_name || '';
   const whAddr = slot.warehouse_address ? ` (${slot.warehouse_address})` : '';
@@ -1655,7 +1752,13 @@ app.post('/api/slots/:id/book', bookRateLimit, async (req, res) => {
   const logistSuffix = logisticianSmsSuffix();
   sendSms(phone, `Вы записаны на ${slot.date} (${dayName}) ${slot.time_start}–${slot.time_end}, ${typeLabel}, склад ${whName}${whAddr}${managerSuffix}${logistSuffix}`);
   redisFlushSlotsCache();
-  res.json({ success: true, warning: bookingWarning || undefined });
+  res.json({
+    success: true,
+    warning: bookingWarning || undefined,
+    organization: organization || undefined,
+    // true — клиент указал одно, а в 1С другое: страница записи покажет пояснение
+    organizationReplaced: organizationReplaced || undefined
+  });
   } catch (err) {
     console.error('Booking error:', err);
     res.status(500).json({ error: 'Внутренняя ошибка сервера. Попробуйте позже.' });
@@ -1694,6 +1797,7 @@ function cancelBlockReason(slot) {
 }
 
 function publicBookingView(slot) {
+  const tz = warehouseTzOffsetHours(slot.warehouse_id);
   return {
     id: slot.id,
     date: slot.date,
@@ -1704,7 +1808,7 @@ function publicBookingView(slot) {
     warehouse_id: slot.warehouse_id || null,
     warehouse_name: slot.warehouse_name || '',
     warehouse_address: slot.warehouse_address || '',
-    tz_offset: warehouseTzOffsetHours(slot.warehouse_id),
+    tz_offset: tz,
     customer_name: slot.customer_name || '',
     customer_phone: slot.customer_phone || '',
     customer_organization: slot.customer_organization || '',
@@ -1712,7 +1816,7 @@ function publicBookingView(slot) {
     customer_comment: slot.customer_comment || '',
     vehicle_class_name: slot.vehicle_class_name || '',
     load_type_name: slot.load_type_name || '',
-    booked_at: slot.booked_at || '',
+    booked_at: stampToLocal(slot.booked_at, tz),
     status: slotStatusLabel(slot),
     canCancel: !cancelBlockReason(slot),
     cancelBlockReason: cancelBlockReason(slot)
@@ -1749,7 +1853,7 @@ app.post('/api/slots/:id/my-booking/cancel', lookupRateLimit, (req, res) => {
   const blocked = cancelBlockReason(slot);
   if (blocked) return res.status(409).json({ error: blocked });
   const info = db.prepare(
-    "UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ? AND is_booked = 1"
+    "UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, customer_account_orgs = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ? AND is_booked = 1"
   ).run(slot.id);
   if (!info || info.changes === 0) {
     return res.status(409).json({ error: 'Запись уже изменена. Обновите страницу.' });
@@ -1879,27 +1983,39 @@ app.get('/api/manager/slots', requireManager, async (req, res) => {
   const ordersMap = {};
   if (allAccounts.length) {
     const placeholders = allAccounts.map(function() { return '?'; }).join(',');
-    const orders = db.prepare('SELECT accountNumber, engineerName, managerName, comment, readyStatus, notReadyReason FROM orders_1c WHERE accountNumber IN (' + placeholders + ')').all(...allAccounts);
+    // customerName — организация счёта по данным 1С: нужна для группировки счетов.
+    const orders = db.prepare('SELECT accountNumber, customerName, engineerName, managerName, comment, readyStatus, notReadyReason FROM orders_1c WHERE accountNumber IN (' + placeholders + ')').all(...allAccounts);
     for (const o of orders) {
-      ordersMap[o.accountNumber] = { engineerName: o.engineerName || '', managerName: o.managerName || '', comment: o.comment || '', readyStatus: o.readyStatus || 0, notReadyReason: o.notReadyReason || '' };
+      ordersMap[o.accountNumber] = { organization: o.customerName || '', engineerName: o.engineerName || '', managerName: o.managerName || '', comment: o.comment || '', readyStatus: o.readyStatus || 0, notReadyReason: o.notReadyReason || '' };
     }
   }
   const result = slots.map(function(row) {
     const accounts = row.customer_account ? row.customer_account.split('\n').map(function(a) { return a.trim(); }).filter(function(a) { return a; }) : [];
+    // Организация счёта: сначала снимок, сделанный при записи, затем текущие данные 1С.
+    let savedOrgs = {};
+    try { if (row.customer_account_orgs) savedOrgs = JSON.parse(row.customer_account_orgs) || {}; } catch (e) { savedOrgs = {}; }
     const accountsInfo = accounts.map(function(a) {
       const info = ordersMap[a] || {};
-      return { accountNumber: a, engineerName: info.engineerName || '', managerName: info.managerName || '', comment: info.comment || '', readyStatus: info.readyStatus || 0, notReadyReason: info.notReadyReason || '' };
+      return { accountNumber: a, organization: savedOrgs[a] || info.organization || '', engineerName: info.engineerName || '', managerName: info.managerName || '', comment: info.comment || '', readyStatus: info.readyStatus || 0, notReadyReason: info.notReadyReason || '' };
     });
+    // Отметки времени хранятся в UTC — в кабинет отдаём по времени склада.
+    const tz = warehouseTzOffsetHours(row.warehouse_id);
     return {
       id: row.id, date: row.date, type: row.type, time_start: row.time_start,
       time_end: row.time_end, is_booked: row.is_booked, confirmed: row.confirmed,
       customer_name: row.customer_name, customer_phone: row.customer_phone,
       customer_account: row.customer_account, customer_organization: row.customer_organization,
-      customer_comment: row.customer_comment, booked_at: row.booked_at,
-      confirmed_at: row.confirmed_at, in_progress: row.in_progress,
-      in_progress_at: row.in_progress_at, assembling: row.assembling,
-      assembling_at: row.assembling_at, completed: row.completed,
-      completed_at: row.completed_at, warehouse_id: row.warehouse_id,
+      customer_comment: row.customer_comment,
+      booked_at: stampToLocal(row.booked_at, tz),
+      confirmed_at: stampToLocal(row.confirmed_at, tz),
+      in_progress: row.in_progress,
+      in_progress_at: stampToLocal(row.in_progress_at, tz),
+      assembling: row.assembling,
+      assembling_at: stampToLocal(row.assembling_at, tz),
+      completed: row.completed,
+      completed_at: stampToLocal(row.completed_at, tz),
+      tz_offset: tz,
+      warehouse_id: row.warehouse_id,
       storekeeper_id: row.storekeeper_id, storekeeper_name: row.storekeeper_name,
       warehouse_name: row.warehouse_name,
       vehicle_class_name: row.vehicle_class_name || null,
@@ -1946,7 +2062,7 @@ app.post('/api/manager/slots/:id/confirm', requireManager, (req, res) => {
   if (!slot.is_booked) {
     return res.status(400).json({ error: 'Cannot confirm an unbooked slot' });
   }
-  db.prepare("UPDATE slots SET confirmed = 1, confirmed_at = datetime('now') WHERE id = ?").run(id);
+  db.prepare("UPDATE slots SET confirmed = 1, confirmed_at = ? WHERE id = ?").run(nowStampUtc(), id);
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Подтверждение', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date, Number(id), getIp(req), getUserAgent(req));
   redisFlushSlotsCache();
   res.json({ success: true });
@@ -1967,7 +2083,7 @@ app.post('/api/manager/slots/:id/take', requireManager, (req, res) => {
     const sk = db.prepare('SELECT * FROM storekeepers WHERE id = ?').get(storekeeperId);
     if (sk) skName = sk.name;
   }
-  db.prepare("UPDATE slots SET in_progress = 1, in_progress_at = datetime('now'), storekeeper_id = ?, storekeeper_name = ? WHERE id = ?").run(storekeeperId || null, skName, id);
+  db.prepare("UPDATE slots SET in_progress = 1, in_progress_at = ?, storekeeper_id = ?, storekeeper_name = ? WHERE id = ?").run(nowStampUtc(), storekeeperId || null, skName, id);
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Взял в работу', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date + (skName ? ', кладовщик: ' + skName : ''), Number(id), getIp(req), getUserAgent(req));
   redisFlushSlotsCache();
   res.json({ success: true });
@@ -1999,7 +2115,7 @@ app.post('/api/manager/slots/:id/assemble', requireManager, (req, res) => {
   if (slot.assembling) {
     return res.status(400).json({ error: 'Slot is already in assembly' });
   }
-  db.prepare("UPDATE slots SET assembling = 1, assembling_at = datetime('now') WHERE id = ?").run(id);
+  db.prepare("UPDATE slots SET assembling = 1, assembling_at = ? WHERE id = ?").run(nowStampUtc(), id);
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'На сборке', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date, Number(id), getIp(req), getUserAgent(req));
   redisFlushSlotsCache();
   res.json({ success: true });
@@ -2014,7 +2130,7 @@ app.post('/api/manager/slots/:id/complete', requireManager, (req, res) => {
     return res.status(400).json({ error: 'Slot is not booked' });
   }
   // Менеджер может завершить заказ в любой момент (не обязательно из «На сборке»).
-  db.prepare("UPDATE slots SET completed = 1, completed_at = datetime('now') WHERE id = ?").run(id);
+  db.prepare("UPDATE slots SET completed = 1, completed_at = ? WHERE id = ?").run(nowStampUtc(), id);
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Завершён', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date, Number(id), getIp(req), getUserAgent(req));
   sendSms(slot.customer_phone, 'Ваш заказ собран, обратитесь к сотруднику склада за его получением.');
   redisFlushSlotsCache();
@@ -2499,6 +2615,15 @@ app.get('/api/manager/c1-orders', requireManager, async (req, res) => {
   }
   query += ' ORDER BY s.date DESC, s.time_start';
   const orders = db.prepare(query).all(...params);
+  // Отметки — по времени склада (в базе они в UTC).
+  orders.forEach(function (o) {
+    const tz = warehouseTzOffsetHours(o.warehouse_id);
+    o.booked_at = stampToLocal(o.booked_at, tz);
+    o.confirmed_at = stampToLocal(o.confirmed_at, tz);
+    o.in_progress_at = stampToLocal(o.in_progress_at, tz);
+    o.assembling_at = stampToLocal(o.assembling_at, tz);
+    o.completed_at = stampToLocal(o.completed_at, tz);
+  });
   const response = { orders };
   redisSet(cacheKey, JSON.stringify(response), 30);
   res.json(response);
@@ -2512,9 +2637,9 @@ app.post('/api/integration/1c/orders/:id/status', require1cToken, (req, res) => 
     return res.status(404).json({ error: 'Order not found' });
   }
   if (status === 'complete') {
-    db.prepare("UPDATE slots SET completed = 1, completed_at = datetime('now') WHERE id = ?").run(id);
+    db.prepare("UPDATE slots SET completed = 1, completed_at = ? WHERE id = ?").run(nowStampUtc(), id);
   } else if (status === 'cancel') {
-    db.prepare("UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ?").run(id);
+    db.prepare("UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, customer_account_orgs = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ?").run(id);
   } else {
     return res.status(400).json({ error: 'Invalid status. Use: complete, cancel' });
   }
@@ -2588,8 +2713,15 @@ app.get('/storekeeper', requireAllowedIP, (req, res) => {
 
 app.get('/api/storekeeper/slots', requireAllowedIP, (req, res) => {
   const slots = db.prepare(
-    "SELECT s.id, s.date, s.time_start, s.time_end, s.type, s.customer_name, s.customer_phone, s.customer_account, s.customer_organization, s.in_progress, s.assembling, s.completed, s.customer_comment, s.storekeeper_id, s.storekeeper_name, s.in_progress_at, s.assembling_at, s.completed_at, w.name AS warehouse_name FROM slots s LEFT JOIN warehouses w ON w.id = s.warehouse_id WHERE (s.in_progress = 1 OR s.assembling = 1 OR s.completed = 1) ORDER BY s.date DESC, s.time_start"
+    "SELECT s.id, s.date, s.time_start, s.time_end, s.type, s.customer_name, s.customer_phone, s.customer_account, s.customer_account_orgs, s.customer_organization, s.warehouse_id, s.in_progress, s.assembling, s.completed, s.customer_comment, s.storekeeper_id, s.storekeeper_name, s.in_progress_at, s.assembling_at, s.completed_at, w.name AS warehouse_name FROM slots s LEFT JOIN warehouses w ON w.id = s.warehouse_id WHERE (s.in_progress = 1 OR s.assembling = 1 OR s.completed = 1) ORDER BY s.date DESC, s.time_start"
   ).all();
+  // Отметки хранятся в UTC — кладовщику показываем время его склада.
+  slots.forEach(function (s) {
+    const tz = warehouseTzOffsetHours(s.warehouse_id);
+    s.in_progress_at = stampToLocal(s.in_progress_at, tz);
+    s.assembling_at = stampToLocal(s.assembling_at, tz);
+    s.completed_at = stampToLocal(s.completed_at, tz);
+  });
   const active = slots.filter(s => !s.completed);
   const done = slots.filter(s => s.completed);
   res.json({ active, completed: done });
@@ -2619,7 +2751,7 @@ app.post('/api/storekeeper/slots/:id/assemble', requireAllowedIP, (req, res) => 
   if (!slot.storekeeper_id) {
     db.prepare("UPDATE slots SET storekeeper_id = ?, storekeeper_name = ? WHERE id = ?").run(sk.id, sk.name, id);
   }
-  db.prepare("UPDATE slots SET assembling = 1, assembling_at = datetime('now') WHERE id = ?").run(id);
+  db.prepare("UPDATE slots SET assembling = 1, assembling_at = ? WHERE id = ?").run(nowStampUtc(), id);
   redisFlushSlotsCache();
   res.json({ success: true });
 });
@@ -2671,7 +2803,7 @@ app.post('/api/storekeeper/slots/:id/complete', requireAllowedIP, (req, res) => 
   if (!slot.storekeeper_id) {
     db.prepare("UPDATE slots SET storekeeper_id = ?, storekeeper_name = ? WHERE id = ?").run(sk.id, sk.name, id);
   }
-  db.prepare("UPDATE slots SET completed = 1, completed_at = datetime('now') WHERE id = ?").run(id);
+  db.prepare("UPDATE slots SET completed = 1, completed_at = ? WHERE id = ?").run(nowStampUtc(), id);
   sendSms(slot.customer_phone, 'Ваш заказ собран, обратитесь к сотруднику склада за его получением.');
   redisFlushSlotsCache();
   res.json({ success: true });
@@ -2803,15 +2935,27 @@ app.get('/api/manager/stats/storekeepers', requireManager, async (req, res) => {
   const unassigned = db.prepare("SELECT COUNT(*) AS c FROM slots WHERE in_progress = 1 AND storekeeper_id IS NULL AND date(in_progress_at) >= ? AND date(in_progress_at) <= ?").get(from, to).c;
   const stats = storekeepers.map(sk => {
     const orders = db.prepare(`
-      SELECT s.date, s.time_start, s.time_end, s.customer_name, s.in_progress_at, s.assembling_at, s.completed_at
+      SELECT s.date, s.time_start, s.time_end, s.customer_name, s.warehouse_id,
+             s.in_progress_at, s.assembling_at, s.completed_at
       FROM slots s
       WHERE s.storekeeper_id = ? AND (s.in_progress = 1 OR s.assembling = 1 OR s.completed = 1)
         AND date(s.in_progress_at) >= ? AND date(s.in_progress_at) <= ?
       ORDER BY s.date, s.time_start
-    `).all(sk.id, from, to).map(o => ({
-      ...o,
-      duration: o.in_progress_at && o.completed_at ? Math.round((new Date(o.completed_at) - new Date(o.in_progress_at)) / 60000) : null
-    }));
+    `).all(sk.id, from, to).map(o => {
+      // Длительность считаем по исходным (UTC) отметкам, затем переводим их
+      // в пояс склада — иначе вкладка показывала бы время на 3 часа раньше,
+      // чем та же заявка в разделе «Заказы».
+      const a = parseStampMs(o.in_progress_at), b = parseStampMs(o.completed_at);
+      const duration = (Number.isFinite(a) && Number.isFinite(b)) ? Math.round((b - a) / 60000) : null;
+      const tz = warehouseTzOffsetHours(o.warehouse_id);
+      return {
+        ...o,
+        in_progress_at: stampToLocal(o.in_progress_at, tz),
+        assembling_at: stampToLocal(o.assembling_at, tz),
+        completed_at: stampToLocal(o.completed_at, tz),
+        duration
+      };
+    });
     const total = orders.length;
     const completed = orders.filter(o => o.completed_at).length;
     return { id: sk.id, name: sk.name, total, completed, orders };
@@ -2831,23 +2975,41 @@ app.get('/api/manager/stats/orders', requireManager, async (req, res) => {
   const cacheKey = 'stats-orders:' + from + ':' + to;
   const cached = await redisGet(cacheKey);
   if (cached) return res.json(JSON.parse(cached));
+  // Отметки в базе — в UTC, а даты в фильтре менеджер выбирает по местному
+  // времени. Берём диапазон с запасом в сутки и отсеиваем уже по местной дате.
+  const widen = (d, days) => new Date(Date.parse(d + 'T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
   const rows = db.prepare(`
     SELECT s.date, s.time_start, s.type, s.customer_name, s.customer_account, s.customer_organization,
-           s.booked_at, s.assembling_at, s.completed_at, w.name AS warehouse_name
+           s.warehouse_id, s.booked_at, s.assembling_at, s.completed_at, w.name AS warehouse_name
     FROM slots s LEFT JOIN warehouses w ON w.id = s.warehouse_id
     WHERE s.booked_at IS NOT NULL AND substr(s.booked_at, 1, 10) >= ? AND substr(s.booked_at, 1, 10) <= ?
     ORDER BY s.booked_at DESC
-  `).all(from, to);
-  const diffMin = (start, end) => (start && end)
-    ? Math.round((new Date(String(end).replace(' ', 'T')) - new Date(String(start).replace(' ', 'T'))) / 60000)
-    : null;
+  `).all(widen(from, -1), widen(to, 1));
+  // Длительности считаем по исходным отметкам — перевод в местное время
+  // одинаково сдвигает обе, но так надёжнее и не зависит от пояса процесса.
+  const diffMin = (start, end) => {
+    const a = parseStampMs(start), b = parseStampMs(end);
+    return (Number.isFinite(a) && Number.isFinite(b)) ? Math.round((b - a) / 60000) : null;
+  };
   let hCount = 0, hTotal = 0, rCount = 0, rTotal = 0;
   const orders = rows.map(o => {
     const durToHandoff = diffMin(o.booked_at, o.assembling_at);
     const durToReady = diffMin(o.booked_at, o.completed_at);
-    if (durToHandoff !== null && durToHandoff >= 0) { hCount++; hTotal += durToHandoff; }
-    if (durToReady !== null && durToReady >= 0) { rCount++; rTotal += durToReady; }
-    return { ...o, durToHandoff, durToReady };
+    const tz = warehouseTzOffsetHours(o.warehouse_id);
+    return {
+      ...o,
+      booked_at: stampToLocal(o.booked_at, tz),
+      assembling_at: stampToLocal(o.assembling_at, tz),
+      completed_at: stampToLocal(o.completed_at, tz),
+      durToHandoff, durToReady
+    };
+  }).filter(o => {
+    const day = String(o.booked_at || '').slice(0, 10);
+    return day >= from && day <= to;
+  });
+  orders.forEach(o => {
+    if (o.durToHandoff !== null && o.durToHandoff >= 0) { hCount++; hTotal += o.durToHandoff; }
+    if (o.durToReady !== null && o.durToReady >= 0) { rCount++; rTotal += o.durToReady; }
   });
   const response = {
     orders,
@@ -3353,7 +3515,7 @@ app.post('/api/manager/slots/:id/cancel', requireManager, (req, res) => {
   if (!slot) {
     return res.status(404).json({ error: 'Slot not found' });
   }
-  db.prepare("UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ?").run(id);
+  db.prepare("UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, customer_account_orgs = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ?").run(id);
   logAction('manager', req.session.firstName + ' ' + req.session.lastName, 'Отмена', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date + (slot.customer_name ? ', клиент: ' + slot.customer_name : ''), Number(id), getIp(req), getUserAgent(req));
   redisFlushSlotsCache();
   res.json({ success: true });
@@ -4116,6 +4278,7 @@ app.get('/api/manager/drivers', requireManager, async (req, res) => {
   const bannedPhones = db.prepare("SELECT phone FROM banned_phones").all().map(r => r.phone);
   for (const d of drivers) {
     d.isBanned = bannedPhones.includes(d.customer_phone);
+    d.last_booked_at = stampToLocal(d.last_booked_at);
   }
   const response = { drivers };
   redisSet(cacheKey, JSON.stringify(response), 30);
@@ -4473,6 +4636,8 @@ app.post('/api/ext/v1/bookings', requireExtApi, async (req, res) => {
   try {
     const { slotId, name: nameRaw, phone: phoneRaw, account, comment, organization: org, vehicleClassId, loadTypeId, force } = req.body || {};
     let organization = org;
+    let organizationReplaced = false;
+    let accountOrgsJson = null;
     if (!slotId || !nameRaw || !phoneRaw) {
       return res.status(400).json({ error: 'Обязательные поля: slotId, name, phone' });
     }
@@ -4526,7 +4691,10 @@ app.post('/api/ext/v1/bookings', requireExtApi, async (req, res) => {
         const username = userSetting ? userSetting.value : '';
         const password = passSetting ? passSetting.value : '';
         const result = await validateAccountsWith1C(accounts, validationUrl, username, password);
-        if (!organization && result.customerName) organization = result.customerName;
+        const orgInfo = organizationFrom1C(organization, result);
+        if (orgInfo.organization) organization = orgInfo.organization;
+        organizationReplaced = orgInfo.replaced;
+        accountOrgsJson = accountOrgsToJson(accounts, result);
         if (!result.valid) {
           const allowInvalidSetting = db.prepare("SELECT value FROM settings WHERE key = 'allow_booking_with_invalid_account'").get();
           const allowInvalid = allowInvalidSetting ? allowInvalidSetting.value === '1' : false;
@@ -4554,15 +4722,15 @@ app.post('/api/ext/v1/bookings', requireExtApi, async (req, res) => {
     }
 
     const bookInfo = db.prepare(
-      "UPDATE slots SET is_booked = 1, customer_name = ?, customer_phone = ?, customer_account = ?, customer_comment = ?, customer_organization = ?, booked_at = datetime('now'), customer_ip = ?, customer_user_agent = ?, vehicle_class_id = ?, load_type_id = ? WHERE id = ? AND is_booked = 0"
-    ).run(name, phone, accounts.join('\n') || null, comment || null, organization || null, getIp(req), 'ext-api', vehicleClassId || null, loadTypeId || null, slotId);
+      "UPDATE slots SET is_booked = 1, customer_name = ?, customer_phone = ?, customer_account = ?, customer_comment = ?, customer_organization = ?, customer_account_orgs = ?, booked_at = ?, customer_ip = ?, customer_user_agent = ?, vehicle_class_id = ?, load_type_id = ? WHERE id = ? AND is_booked = 0"
+    ).run(name, phone, accounts.join('\n') || null, comment || null, organization || null, accountOrgsJson, nowStampUtc(), getIp(req), 'ext-api', vehicleClassId || null, loadTypeId || null, slotId);
     if (!bookInfo || bookInfo.changes === 0) {
       return res.status(409).json({ error: 'Слот уже занят' });
     }
     if (autoConfirmSlot) {
-      db.prepare("UPDATE slots SET confirmed = 1, confirmed_at = datetime('now') WHERE id = ?").run(slotId);
+      db.prepare("UPDATE slots SET confirmed = 1, confirmed_at = ? WHERE id = ?").run(nowStampUtc(), slotId);
     }
-    try { db.prepare("INSERT INTO booking_events (slot_id, created_at) VALUES (?, datetime('now'))").run(Number(slotId)); } catch (e) {}
+    try { db.prepare('INSERT INTO booking_events (slot_id, created_at) VALUES (?, ?)').run(Number(slotId), nowStampUtc()); } catch (e) {}
     logAction('ext-api', name + ' (' + phone + ')', 'Бронирование через API', 'Слот ' + slot.time_start + '-' + slot.time_end + ' ' + slot.date, Number(slotId), getIp(req), getUserAgent(req));
     const typeLabel = slot.type === 'small' ? 'До 3-х товаров' : 'Сборный заказ';
     const dayNames = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
@@ -4600,7 +4768,7 @@ app.delete('/api/ext/v1/bookings/:slotId', requireExtApi, (req, res) => {
   const blocked = cancelBlockReason(slot);
   if (blocked) return res.status(409).json({ error: blocked });
   const info = db.prepare(
-    "UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ? AND is_booked = 1"
+    "UPDATE slots SET is_booked = 0, confirmed = 0, in_progress = 0, completed = 0, assembling = 0, customer_name = NULL, customer_phone = NULL, customer_account = NULL, customer_comment = NULL, customer_organization = NULL, customer_account_orgs = NULL, booked_at = NULL, confirmed_at = NULL, in_progress_at = NULL, completed_at = NULL, assembling_at = NULL, storekeeper_id = NULL, storekeeper_name = NULL WHERE id = ? AND is_booked = 1"
   ).run(slot.id);
   if (!info || info.changes === 0) return res.status(409).json({ error: 'Запись уже изменена' });
   logAction('ext-api', (slot.customer_name || '') + ' (' + (slot.customer_phone || '') + ')', 'Отмена записи через API',

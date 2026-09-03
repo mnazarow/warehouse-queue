@@ -69,9 +69,13 @@ NODE_BIN="$(command -v node)"
 # 4. Inputs -------------------------------------------------------------------
 if [ -f "$ENV_FILE" ]; then
   echo "==> $ENV_FILE exists — keeping it"
-  DOMAIN="$(grep -E '^DOMAIN=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
-  PGPW="$(grep -E '^PGSQL_PASSWORD=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
-  EMAIL="$(grep -E '^CERTBOT_EMAIL=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+  # `|| true` обязателен: при set -euo pipefail отсутствие строки в файле
+  # обрывало установку без единого сообщения.
+  DOMAIN="$(grep -E '^DOMAIN=' "$ENV_FILE" | head -1 | cut -d= -f2- || true)"
+  PGPW="$(grep -E '^PGSQL_PASSWORD=' "$ENV_FILE" | head -1 | cut -d= -f2- || true)"
+  EMAIL="$(grep -E '^CERTBOT_EMAIL=' "$ENV_FILE" | head -1 | cut -d= -f2- || true)"
+  [ -n "$DOMAIN" ] || { echo "В $ENV_FILE нет строки DOMAIN= — добавьте её и повторите"; exit 1; }
+  [ -n "$PGPW" ] || { echo "В $ENV_FILE нет строки PGSQL_PASSWORD= — добавьте её и повторите"; exit 1; }
 else
   read -r -p "Domain (DNS must already point here): " DOMAIN
   read -r -p "Email for Let's Encrypt: " EMAIL
@@ -92,9 +96,16 @@ if [ ! -f "$ENV_FILE" ]; then
   echo "==> Writing $ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 PORT=$PORT
+NODE_ENV=production
 DB_PATH=$DATA_DIR/warehouse.db
 SESSION_SECRET=$SESSION_SECRET
+# Приложение стоит за nginx: адрес клиента берётся из X-Forwarded-For,
+# TRUST_PROXY_HOPS — сколько своих прокси перед приложением.
 TRUST_PROXY=1
+TRUST_PROXY_HOPS=1
+# Ставится в 1 после успешного выпуска сертификата (см. конец установки):
+# cookie сессии тогда не уходит по открытому HTTP.
+COOKIE_SECURE=0
 SEED_CONNECTORS=1
 PGSQL_HOST=127.0.0.1
 PGSQL_PORT=5432
@@ -138,7 +149,8 @@ cat > /etc/nginx/sites-available/$SERVICE <<EOF
 server {
     listen 80;
     server_name $DOMAIN;
-    client_max_body_size 10m;
+    # Схемы проезда (картинки) и восстановление из резервной копии.
+    client_max_body_size 64m;
     location / {
         proxy_pass http://127.0.0.1:$PORT;
         proxy_http_version 1.1;
@@ -154,11 +166,23 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
 echo "==> Obtaining Let's Encrypt certificate"
-certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
-  -m "${EMAIL:-admin@$DOMAIN}" --redirect || \
+if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+     -m "${EMAIL:-admin@$DOMAIN}" --redirect; then
+  # Сертификат получен — включаем защищённую cookie сессии.
+  if grep -q '^COOKIE_SECURE=' "$ENV_FILE"; then
+    sed -i 's/^COOKIE_SECURE=.*/COOKIE_SECURE=1/' "$ENV_FILE"
+  else
+    echo "COOKIE_SECURE=1" >> "$ENV_FILE"
+  fi
+  systemctl restart $SERVICE
+  echo "==> HTTPS is on, COOKIE_SECURE=1"
+else
   echo "WARN: certbot failed (check DNS/ports). App is still served over HTTP."
+  echo "      After fixing TLS set COOKIE_SECURE=1 in $ENV_FILE and restart $SERVICE."
+fi
 
 # 9. Auto-deploy timer --------------------------------------------------------
+if [ -f "$APP_DIR/deploy/auto-deploy-native.sh" ]; then
 echo "==> Installing auto-deploy timer (poll every $POLL_INTERVAL)"
 chmod +x "$APP_DIR/deploy/auto-deploy-native.sh"
 cat > /etc/systemd/system/$SERVICE-deploy.service <<EOF
@@ -189,12 +213,19 @@ WantedBy=timers.target
 EOF
 systemctl daemon-reload
 systemctl enable --now $SERVICE-deploy.timer
+else
+  echo "WARN: deploy/auto-deploy-native.sh not found — auto-deploy timer skipped."
+  echo "      Update manually:  cd $APP_DIR && ./update.sh"
+fi
 
 echo
 echo "All done."
-echo "  Site:        https://$DOMAIN/manager.html   (login admin / admin123 — change it!)"
+echo "  Site:        https://$DOMAIN/manager.html"
+echo "  Login:       admin, password is in $APP_DIR/ADMIN-PASSWORD.txt"
+echo "               (log in, change it in the cabinet, then delete the file)"
 echo "  App service: systemctl status $SERVICE   |   journalctl -u $SERVICE -f"
 echo "  Auto-deploy: every $POLL_INTERVAL, pulls $REPO_URL ($BRANCH) and restarts on changes."
 echo "  Deploy now:  systemctl start $SERVICE-deploy.service"
+echo "  Self-test:   cd $APP_DIR && node test/passwords.test.js && node test/timezone.test.js"
 echo "  PostgreSQL:  switch in the manager UI (Настройки → PostgreSQL → Мигрировать → Переключиться)."
 echo "  Uninstall:   sudo bash $APP_DIR/deploy/uninstall.sh   (add PURGE_DATA=1 DROP_DB=1 to wipe data)"

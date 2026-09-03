@@ -2173,8 +2173,8 @@
           <td>${escapeHtml(s.load_type_name) || '—'}</td>
           <td class="col-name">${escapeHtml(s.customer_name) || '—'}</td>
           <td class="col-phone">${escapeHtml(s.customer_phone) || '—'}</td>
-          <td class="col-account">${accounts.length ? accounts.map(function(a, i) { var info = ''; if (a.engineerName || a.managerName) { info += '<span style="font-size:0.75rem;color:#718096;margin-left:4px">(' + (escapeHtml(a.managerName) || '—') + ' / ' + (escapeHtml(a.engineerName) || '—') + ')</span>'; var __mp = extractPhone(a.managerName); if (__mp) { info += smsBtn(s.id, i, 'manager', 'менеджеру'); } var __ep = extractPhone(a.engineerName); if (__ep) { info += smsBtn(s.id, i, 'engineer', 'инженеру'); } } if (a.comment) { info += '<span style="font-size:0.75rem;color:#2b6cb0;margin-left:4px">Комментарий: ' + escapeHtml(a.comment) + '</span>'; } if (a.notReadyReason) { info += '<span style="font-size:0.75rem;color:#e53e3e;margin-left:4px">Причина: ' + escapeHtml(a.notReadyReason) + '</span>'; } else if (Number(a.readyStatus) === 1) { info += '<span style="font-size:0.75rem;color:#38a169;font-weight:600;margin-left:4px">✓ Готов к отгрузке</span>'; } return '<div style="margin-bottom:2px"><button class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:1px 6px;margin-right:4px" onclick="toggleAccountNomRow(' + s.id + ', ' + i + ', this)">+</button>' + escapeHtml(a.accountNumber) + info + '</div>'; }).join('') : '—'}</td>
-          <td class="col-org">${escapeHtml(s.customer_organization) || '—'}</td>
+          <td class="col-account">${renderAccountsCell(s.id, accounts)}</td>
+          <td class="col-org">${renderOrgCell(s.customer_organization, accounts)}</td>
           <td class="col-comment" style="white-space:pre-wrap">${escapeHtml(s.customer_comment) || '—'}</td>
           <td class="col-actions">${actions}</td>
           <td>${escapeHtml(s.storekeeper_name) || '—'}</td>
@@ -2191,6 +2191,70 @@
       }
       html += '</tbody></table></div>';
       container.innerHTML = html;
+    }
+
+
+
+    // Организация заявки. Список берём из счетов (там организация у каждого
+    // отдельным полем), а не разбором строки по запятой: в самом названии
+    // юрлица запятая тоже встречается — «Иванов И.И., ИП».
+    function renderOrgCell(value, accounts) {
+      var uniq = [];
+      (accounts || []).forEach(function (a) {
+        var o = (a.organization || '').trim();
+        if (o && uniq.indexOf(o) === -1) uniq.push(o);
+      });
+      if (!uniq.length) {
+        var v = String(value == null ? '' : value).trim();
+        return v ? escapeHtml(v) : '—';
+      }
+      if (uniq.length === 1) return escapeHtml(uniq[0]);
+      return uniq.map(function (x) { return '<div style="margin-bottom:2px">' + escapeHtml(x) + '</div>'; }).join('');
+    }
+
+    // Один счёт со всеми пометками (менеджер/инженер, комментарий, готовность).
+    function renderAccountLine(slotId, a, i) {
+      var info = '';
+      if (a.engineerName || a.managerName) {
+        info += '<span style="font-size:0.75rem;color:#718096;margin-left:4px">(' +
+          (escapeHtml(a.managerName) || '—') + ' / ' + (escapeHtml(a.engineerName) || '—') + ')</span>';
+        if (extractPhone(a.managerName)) info += smsBtn(slotId, i, 'manager', 'менеджеру');
+        if (extractPhone(a.engineerName)) info += smsBtn(slotId, i, 'engineer', 'инженеру');
+      }
+      if (a.comment) {
+        info += '<span style="font-size:0.75rem;color:#2b6cb0;margin-left:4px">Комментарий: ' + escapeHtml(a.comment) + '</span>';
+      }
+      if (a.notReadyReason) {
+        info += '<span style="font-size:0.75rem;color:#e53e3e;margin-left:4px">Причина: ' + escapeHtml(a.notReadyReason) + '</span>';
+      } else if (Number(a.readyStatus) === 1) {
+        info += '<span style="font-size:0.75rem;color:#38a169;font-weight:600;margin-left:4px">✓ Готов к отгрузке</span>';
+      }
+      return '<div style="margin-bottom:2px"><button class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:1px 6px;margin-right:4px" ' +
+        'onclick="toggleAccountNomRow(' + slotId + ', ' + i + ', this)">+</button>' + escapeHtml(a.accountNumber) + info + '</div>';
+    }
+
+    // Счета в заявке разделены по организациям из 1С. Если организация одна
+    // (или неизвестна), заголовок не выводится — вид остаётся прежним.
+    function renderAccountsCell(slotId, accounts) {
+      if (!accounts || !accounts.length) return '—';
+      var groups = [];
+      var byOrg = {};
+      accounts.forEach(function (a, i) {
+        var org = (a.organization || '').trim();
+        var key = org || '\u0000';
+        if (!byOrg[key]) { byOrg[key] = { org: org, items: [] }; groups.push(byOrg[key]); }
+        byOrg[key].items.push({ a: a, i: i });
+      });
+      var named = groups.filter(function (g) { return g.org; });
+      if (named.length < 2) {
+        return accounts.map(function (a, i) { return renderAccountLine(slotId, a, i); }).join('');
+      }
+      return groups.map(function (g) {
+        var head = g.org
+          ? '<div style="font-size:0.75rem;font-weight:700;color:#0d4d8f;margin:4px 0 2px">' + escapeHtml(g.org) + '</div>'
+          : '<div style="font-size:0.75rem;font-weight:600;color:#a0aec0;margin:4px 0 2px">Без организации</div>';
+        return head + g.items.map(function (it) { return renderAccountLine(slotId, it.a, it.i); }).join('');
+      }).join('');
     }
 
     const accountNomCache = {};

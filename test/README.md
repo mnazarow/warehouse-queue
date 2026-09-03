@@ -6,7 +6,7 @@
 ```bash
 # 1. Тесты, которым не нужен сервер
 node test/passwords.test.js     # хеширование паролей, совместимость со старыми хешами
-node test/timezone.test.js      # часовые пояса складов
+node test/timezone.test.js      # часовые пояса складов и разбор отметок времени
 
 # 2. Тесты по HTTP: сначала поднимаем сервер на заглушках
 rm -f /tmp/sec_test.db*
@@ -14,6 +14,7 @@ NODE_PATH=test/_stubs/node_modules node test/_stubs/server_e2e.js &
 sleep 5
 node test/security.test.js      # 27 проверок безопасности
 node test/permissions.test.js   # 29 проверок прав доступа и маскировки секретов
+node test/orgtime.test.js       # 14 проверок организаций из 1С и времени отметок
 node test/regression.test.js    # 23 проверки рабочих сценариев
 ```
 

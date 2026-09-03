@@ -17,6 +17,7 @@ set -euo pipefail
 #   ./update.sh --no-backup              # без резервной копии (не советуем)
 #   ./update.sh --no-restart             # только обновить файлы
 #   ./update.sh --rollback               # откат кода на последнюю копию
+#   ./update.sh --test                   # после обновления прогнать тесты
 #   ./update.sh --help
 #
 # Резервные копии: backups/updates/UPDATE-<дата>/ (код + файлы SQLite).
@@ -45,6 +46,7 @@ KEEP_BACKUPS=5
 DO_BACKUP=true
 DO_RESTART=true
 DO_ROLLBACK=false
+RUN_TESTS=false
 BRANCH=""
 SOURCE_DIR=""
 MODE=""            # systemd | docker | manual (пусто = определить самим)
@@ -58,10 +60,11 @@ while [[ $# -gt 0 ]]; do
     --no-backup)   DO_BACKUP=false; shift ;;
     --no-restart)  DO_RESTART=false; shift ;;
     --rollback)    DO_ROLLBACK=true; shift ;;
-    --branch)      BRANCH="${2:-}"; shift 2 ;;
-    --source)      SOURCE_DIR="${2:-}"; shift 2 ;;
-    --mode)        MODE="${2:-}"; shift 2 ;;
-    --port)        PORT="${2:-}"; shift 2 ;;
+    --test)        RUN_TESTS=true; shift ;;
+    --branch)      [ $# -ge 2 ] || die "--branch требует значение"; BRANCH="$2"; shift 2 ;;
+    --source)      [ $# -ge 2 ] || die "--source требует значение"; SOURCE_DIR="$2"; shift 2 ;;
+    --mode)        [ $# -ge 2 ] || die "--mode требует значение"; MODE="$2"; shift 2 ;;
+    --port)        [ $# -ge 2 ] || die "--port требует значение"; PORT="$2"; shift 2 ;;
     *) die "Неизвестный параметр: $1 (см. ./update.sh --help)" ;;
   esac
 done
@@ -147,8 +150,11 @@ make_backup() {
   dir="$BACKUP_ROOT/UPDATE-$stamp"
   mkdir -p "$dir"
   info "Резервная копия: $dir"
+  # .session-secret сохраняем (иначе после отката все выйдут из кабинета),
+  # ADMIN-PASSWORD.txt — нет: это разовый файл с паролем.
   tar --exclude='./node_modules' --exclude='./.git' --exclude='./backups' \
       --exclude='./server.log' --exclude='./warehouse.db*' \
+      --exclude='./ADMIN-PASSWORD.txt' \
       -czf "$dir/code.tar.gz" .
   # Файлы SQLite (если есть; при PostgreSQL их просто нет)
   local f
@@ -169,7 +175,9 @@ make_backup() {
 }
 
 latest_backup() {
-  ls -1dt "$BACKUP_ROOT"/UPDATE-* 2>/dev/null | head -1
+  # `|| true` обязателен: при set -euo pipefail неуспешный ls обрывал бы
+  # скрипт до понятного сообщения «копий для отката нет».
+  ls -1dt "$BACKUP_ROOT"/UPDATE-* 2>/dev/null | head -1 || true
 }
 
 # ------------------------------------------------------------
@@ -280,6 +288,44 @@ restart_app "$APP_MODE"
 
 if health_check 30; then
   log "Обновление завершено успешно"
+
+  # Проверяем, что отвечает именно НОВЫЙ код: этот маршрут появился вместе с
+  # настройкой обязательных полей. Старый процесс на том же порту вернёт 404.
+  if curl -fsS -m 3 "http://127.0.0.1:${PORT}/api/public/settings/required-fields" >/dev/null 2>&1; then
+    log "Отвечает обновлённое приложение"
+  else
+    warn "Приложение отвечает, но похоже на старую версию кода."
+    warn "Чаще всего порт держит второй процесс. Проверьте: pgrep -fa 'node .*server\.js'"
+  fi
+
+  # Два процесса node server.js — самая частая причина «обновил, а версия старая».
+  if command -v pgrep >/dev/null 2>&1; then
+    RUNNING="$(pgrep -fc 'node .*server\.js' 2>/dev/null || echo 0)"
+    if [ "${RUNNING:-0}" -gt 1 ]; then
+      warn "Запущено процессов node server.js: $RUNNING — должен быть один!"
+      warn "Остановите лишние: pkill -f 'node .*server\.js' и запустите приложение заново."
+    fi
+  fi
+
+  # Разовый файл с паролем администратора появляется только на новой установке.
+  if [ -f "$SCRIPT_DIR/ADMIN-PASSWORD.txt" ]; then
+    warn "Найден ADMIN-PASSWORD.txt — войдите в кабинет, смените пароль и удалите файл."
+  fi
+
+  if $RUN_TESTS; then
+    info "Прогоняю тесты..."
+    TEST_FAIL=0
+    for t in test/passwords.test.js test/timezone.test.js; do
+      [ -f "$t" ] || continue
+      if node "$t" >/dev/null 2>&1; then log "OK: $t"; else err "ОШИБКА: $t"; TEST_FAIL=1; fi
+    done
+    for t in test/security.test.js test/permissions.test.js test/orgtime.test.js test/regression.test.js; do
+      [ -f "$t" ] || continue
+      info "Пропущен (нужен отдельный тестовый стенд): $t"
+    done
+    [ "$TEST_FAIL" -eq 0 ] || warn "Часть тестов не прошла — проверьте вывод вручную: node test/<файл>"
+  fi
+
   echo
   info "Если что-то пошло не так: ./update.sh --rollback"
 else
