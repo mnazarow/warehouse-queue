@@ -854,3 +854,28 @@ body.vk-page .vk-radio.active .vk-radio-body .s.vk-tz { color: #4a739f; }
 .vk-radio.active .vk-cat { background: #fff; border-color: #b9cde4; }
 body.theme-hitech .vk-cats-toggle { color: #57d7ff; border-bottom-color: rgba(87, 215, 255, 0.45); }
 body.theme-hitech .vk-cat { background: rgba(0, 229, 255, 0.10); color: #7df9ff; border-color: #223558; }
+
+/* --- Широкая карточка склада: содержимое в две колонки --- */
+/* Одной ширины мало: поля растянулись бы в длинные полосы, а окно стало бы
+   выше экрана. Поэтому ширина используется под две колонки, а блоки с классом
+   wh-span занимают всю ширину. */
+.modal.wh-modal-wide {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 26px;
+  align-items: start;
+  max-height: 92vh;
+  overflow-y: auto;
+}
+.modal.wh-modal-wide > h2,
+.modal.wh-modal-wide > .modal-actions,
+.modal.wh-modal-wide > .wh-span { grid-column: 1 / -1; }
+.modal.wh-modal-wide > .modal-actions { margin-top: 4px; }
+/* Общее правило .form-group input { width:100% } растягивало и галочку —
+   на широкой карточке это было особенно заметно. */
+.modal.wh-modal-wide input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 auto; }
+.modal.wh-modal-wide input[type="file"] { width: 100%; }
+/* На узком экране — обратно в одну колонку */
+@media (max-width: 900px) {
+  .modal.wh-modal-wide { grid-template-columns: 1fr; }
+}

@@ -1615,7 +1615,7 @@
   </div>
 
   <div class="modal-overlay" id="editWarehouseModal">
-    <div class="modal" style="max-width:400px">
+    <div class="modal wh-modal-wide" style="max-width:1200px">
       <h2>Редактировать склад</h2>
       <input type="hidden" id="editWarehouseId">
       <div class="form-group">
@@ -1626,9 +1626,9 @@
         <label>Адрес</label>
         <input type="text" id="editWarehouseAddress">
       </div>
-      <div class="form-group">
+      <div class="form-group wh-span">
         <label>Категории товаров на складе</label>
-        <div id="editWarehouseCategories" style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;max-height:190px;overflow-y:auto">
+        <div id="editWarehouseCategories" style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;max-height:220px;overflow-y:auto;column-width:220px;column-gap:18px">
           <div class="no-slots" style="padding:6px">Загрузка...</div>
         </div>
         <div style="display:flex;gap:6px;margin-top:8px">
@@ -1645,11 +1645,11 @@
       </div>
       <div class="form-group">
         <label>Как доехать (показывается клиенту после записи)</label>
-        <textarea id="editWarehouseDirections" rows="3" placeholder="Съезд с МКАД на..., далее вторые ворота, пропуск у охраны" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
+        <textarea id="editWarehouseDirections" rows="5" placeholder="Съезд с МКАД на..., далее вторые ворота, пропуск у охраны" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
       </div>
       <div class="form-group">
         <label>Маршрут из Москвы (по шагам, каждый шаг с новой строки)</label>
-        <textarea id="editWarehouseRouteMoscow" rows="3" placeholder="По М-4 «Дон» до 23-го км&#10;Съезд «Видное», направо&#10;400 м вдоль забора до вторых ворот" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
+        <textarea id="editWarehouseRouteMoscow" rows="5" placeholder="По М-4 «Дон» до 23-го км&#10;Съезд «Видное», направо&#10;400 м вдоль забора до вторых ворот" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
         <div style="font-size:0.78rem;color:#718096;margin-top:4px">По шагам строится нарисованная схема «Москва → склад» в окне «Вы записаны!»; склад на ней отмечен логотипом.</div>
       </div>
       <div class="form-group">
@@ -1660,13 +1660,13 @@
           <button class="btn btn-secondary btn-sm" type="button" onclick="clearSchemeFile('edit')" style="display:block;margin-top:6px">Убрать схему</button>
         </div>
       </div>
-      <div class="form-group">
+      <div class="form-group wh-span">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="editWarehouseDefault"> Склад по умолчанию
         </label>
       </div>
-      <div id="editWarehouseError" style="color:#e53e3e;font-size:0.9rem;margin-bottom:8px;display:none"></div>
-      <div id="editWarehouseSuccess" style="color:#38a169;font-size:0.9rem;margin-bottom:8px;display:none"></div>
+      <div id="editWarehouseError" class="wh-span" style="color:#e53e3e;font-size:0.9rem;margin-bottom:8px;display:none"></div>
+      <div id="editWarehouseSuccess" class="wh-span" style="color:#38a169;font-size:0.9rem;margin-bottom:8px;display:none"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeEditWarehouseModal()">Отмена</button>
         <button class="btn btn-primary" onclick="updateWarehouse()">Сохранить</button>
