@@ -15,6 +15,7 @@ sleep 5
 node test/security.test.js      # 27 проверок безопасности
 node test/permissions.test.js   # 29 проверок прав доступа и маскировки секретов
 node test/orgtime.test.js       # 14 проверок организаций из 1С и времени отметок
+node test/warehouse-categories.test.js   # 17 проверок категорий товаров у складов
 node test/regression.test.js    # 23 проверки рабочих сценариев
 ```
 

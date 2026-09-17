@@ -732,6 +732,8 @@ function ensureFeatureSchema() {
     if (dbAdapter.getType() === 'postgresql') {
       db.exec("CREATE TABLE IF NOT EXISTS logisticians (id SERIAL PRIMARY KEY, name TEXT NOT NULL, phone TEXT DEFAULT '', created_at TEXT DEFAULT '')");
       db.exec("CREATE TABLE IF NOT EXISTS booking_events (id SERIAL PRIMARY KEY, slot_id INTEGER DEFAULT 0, created_at TEXT DEFAULT '')");
+      // Категории товаров, которые хранятся на складе.
+      db.exec("CREATE TABLE IF NOT EXISTS warehouse_categories (id SERIAL PRIMARY KEY, warehouse_id INTEGER NOT NULL, category_id INTEGER NOT NULL, UNIQUE (warehouse_id, category_id))");
       // address покрывает старые PG-базы, мигрированные до появления колонки —
       // именно её отсутствие ломало публичный список складов («Нет складов»).
       ['address', 'directions', 'map_scheme', 'route_moscow', 'tz_offset'].forEach(function(c) {
@@ -748,6 +750,7 @@ function ensureFeatureSchema() {
       // страхует базы, открытые в обход initDatabase.
       db.exec("CREATE TABLE IF NOT EXISTS logisticians (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')))");
       db.exec("CREATE TABLE IF NOT EXISTS booking_events (id INTEGER PRIMARY KEY AUTOINCREMENT, slot_id INTEGER DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')))");
+      db.exec("CREATE TABLE IF NOT EXISTS warehouse_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, warehouse_id INTEGER NOT NULL, category_id INTEGER NOT NULL, UNIQUE (warehouse_id, category_id))");
       try {
         const wcols = sqliteDb.prepare("PRAGMA table_info('warehouses')").all().map(function(c) { return c.name; });
         ['directions', 'map_scheme', 'route_moscow', 'tz_offset'].forEach(function(c) {
@@ -772,7 +775,8 @@ function ensureFeatureSchema() {
       'CREATE INDEX IF NOT EXISTS idx_banned_phones_ph ON banned_phones(phone)',
       'CREATE INDEX IF NOT EXISTS idx_user_logs_created ON user_logs(created_at)',
       'CREATE INDEX IF NOT EXISTS idx_page_visits_at ON page_visits(visited_at)',
-      'CREATE INDEX IF NOT EXISTS idx_booking_events_at ON booking_events(created_at)'
+      'CREATE INDEX IF NOT EXISTS idx_booking_events_at ON booking_events(created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_wh_categories_wh ON warehouse_categories(warehouse_id)'
     ].forEach(function (sql) { try { db.exec(sql); } catch (e) {} });
 
     // Разовый перенос истории бронирований в журнал статистики.
@@ -3198,7 +3202,11 @@ app.delete('/api/manager/categories/:id', requireManager, (req, res) => {
   const cat = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
   if (!cat) return res.status(404).json({ error: 'Not found' });
   db.prepare('DELETE FROM categories WHERE id = ?').run(id);
+  // Категория исчезает и со всех складов, иначе в связях остались бы ссылки
+  // на несуществующую запись.
+  try { db.prepare('DELETE FROM warehouse_categories WHERE category_id = ?').run(id); } catch (e) {}
   redisFlushByPrefix('categories');
+  redisFlushByPrefix('warehouses');
   res.json({ success: true });
 });
 
@@ -3414,10 +3422,67 @@ app.get('/api/manager/warehouses', requireManager, async (req, res) => {
   const cached = await redisGet(cacheKey);
   if (cached) return res.json(JSON.parse(cached));
   const list = db.prepare('SELECT * FROM warehouses ORDER BY is_default DESC, name').all();
+  // Категории товаров склада — одним запросом на весь список.
+  const catsByWh = warehouseCategoriesMap();
+  list.forEach(function (w) { w.categories = catsByWh[w.id] || []; });
   const response = { warehouses: list };
   redisSet(cacheKey, JSON.stringify(response), 300);
   res.json(response);
 });
+
+// ---------------------------------------------------------------------------
+// Категории товаров на складе
+// ---------------------------------------------------------------------------
+// Связь «склад ↔ категория» хранится в отдельной таблице warehouse_categories.
+// Категории берутся из общего справочника (вкладка «Номенклатура»), поэтому
+// переименование категории автоматически отражается на всех складах.
+
+// Категории одного склада: [{ id, name }] в алфавитном порядке.
+function warehouseCategories(warehouseId) {
+  try {
+    return db.prepare(
+      'SELECT c.id, c.name FROM warehouse_categories wc JOIN categories c ON c.id = wc.category_id WHERE wc.warehouse_id = ? ORDER BY c.name'
+    ).all(warehouseId) || [];
+  } catch (e) { return []; }
+}
+
+// Категории сразу для всех складов: { warehouseId: [{id,name}] }.
+// Отдельный запрос на склад в списке кабинета был бы лишней нагрузкой,
+// особенно на PostgreSQL, где каждый запрос — отдельный вызов psql.
+function warehouseCategoriesMap() {
+  const map = {};
+  try {
+    const rows = db.prepare(
+      'SELECT wc.warehouse_id AS wid, c.id, c.name FROM warehouse_categories wc JOIN categories c ON c.id = wc.category_id ORDER BY c.name'
+    ).all() || [];
+    rows.forEach(function (r) {
+      if (!map[r.wid]) map[r.wid] = [];
+      map[r.wid].push({ id: r.id, name: r.name });
+    });
+  } catch (e) {}
+  return map;
+}
+
+// Заменяет набор категорий склада. Принимает массив id; значения, которых нет
+// в справочнике, игнорируются. undefined — не трогать (старые формы кабинета
+// не присылают это поле).
+function setWarehouseCategories(warehouseId, categoryIds) {
+  if (categoryIds === undefined || categoryIds === null) return;
+  const wanted = (Array.isArray(categoryIds) ? categoryIds : [])
+    .map(function (v) { return parseInt(v, 10); })
+    .filter(function (v) { return Number.isFinite(v) && v > 0; });
+  const uniq = [];
+  wanted.forEach(function (v) { if (uniq.indexOf(v) === -1) uniq.push(v); });
+  db.prepare('DELETE FROM warehouse_categories WHERE warehouse_id = ?').run(warehouseId);
+  if (!uniq.length) return;
+  const known = db.prepare('SELECT id FROM categories').all().map(function (c) { return Number(c.id); });
+  uniq.forEach(function (cid) {
+    if (known.indexOf(cid) === -1) return;
+    try {
+      db.prepare('INSERT INTO warehouse_categories (warehouse_id, category_id) VALUES (?, ?)').run(warehouseId, cid);
+    } catch (e) {}
+  });
+}
 
 // Схема проезда: только картинка data-URL разумного размера.
 function validateMapScheme(mapScheme) {
@@ -3443,7 +3508,7 @@ function normalizeTzOffset(v) {
 }
 
 app.post('/api/manager/warehouses', requireManager, (req, res) => {
-  const { name, address, isDefault, directions, mapScheme, routeMoscow, tzOffset } = req.body;
+  const { name, address, isDefault, directions, mapScheme, routeMoscow, tzOffset, categoryIds } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Name is required' });
   }
@@ -3454,11 +3519,19 @@ app.post('/api/manager/warehouses', requireManager, (req, res) => {
   if (isDefault) {
     db.prepare('UPDATE warehouses SET is_default = 0').run();
   }
-  db.prepare('INSERT INTO warehouses (name, address, is_default, directions, map_scheme, route_moscow, tz_offset) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  const info = db.prepare('INSERT INTO warehouses (name, address, is_default, directions, map_scheme, route_moscow, tz_offset) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(name.trim(), address || '', isDefault ? 1 : 0, directions || '', scheme.value, routeMoscow || '', tz.value);
+  // id нового склада: на PostgreSQL lastInsertRowid не возвращается, поэтому
+  // при его отсутствии находим склад по имени.
+  let newId = info && info.lastInsertRowid ? Number(info.lastInsertRowid) : 0;
+  if (!newId) {
+    const row = db.prepare('SELECT id FROM warehouses WHERE name = ? ORDER BY id DESC').get(name.trim());
+    newId = row ? Number(row.id) : 0;
+  }
+  if (newId) setWarehouseCategories(newId, categoryIds);
   redisFlushByPrefix('warehouses');
   redisFlushSlotsCache();
-  res.json({ success: true });
+  res.json({ success: true, id: newId || undefined });
 });
 
 app.put('/api/manager/warehouses/:id', requireManager, (req, res) => {
@@ -3491,9 +3564,17 @@ app.put('/api/manager/warehouses/:id', requireManager, (req, res) => {
   }
   db.prepare('UPDATE warehouses SET name = ?, address = ?, is_default = ?, directions = ?, map_scheme = ?, route_moscow = ?, tz_offset = ? WHERE id = ?')
     .run(name.trim(), address || '', isDefault ? 1 : 0, newDirections, newScheme, newRouteMoscow, newTz, id);
+  setWarehouseCategories(Number(id), req.body.categoryIds);
   redisFlushByPrefix('warehouses');
   redisFlushSlotsCache();
   res.json({ success: true });
+});
+
+// Категории товаров конкретного склада (для формы редактирования).
+app.get('/api/manager/warehouses/:id/categories', requireManager, (req, res) => {
+  const wh = db.prepare('SELECT id FROM warehouses WHERE id = ?').get(req.params.id);
+  if (!wh) return res.status(404).json({ error: 'Warehouse not found' });
+  res.json({ categories: warehouseCategories(Number(req.params.id)) });
 });
 
 app.delete('/api/manager/warehouses/:id', requireManager, (req, res) => {
@@ -3503,6 +3584,8 @@ app.delete('/api/manager/warehouses/:id', requireManager, (req, res) => {
     return res.status(404).json({ error: 'Warehouse not found' });
   }
   db.prepare('DELETE FROM warehouses WHERE id = ?').run(id);
+  // Связи с категориями удаляем явно: внешних ключей с каскадом в схеме нет.
+  try { db.prepare('DELETE FROM warehouse_categories WHERE warehouse_id = ?').run(id); } catch (e) {}
   redisFlushByPrefix('warehouses');
   res.json({ success: true });
 });

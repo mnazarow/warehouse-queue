@@ -233,6 +233,17 @@ function initDatabase() {
     )
   `);
 
+  // Категории товаров на складе: связь «склад ↔ категория».
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS warehouse_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      warehouse_id INTEGER NOT NULL,
+      category_id INTEGER NOT NULL,
+      UNIQUE (warehouse_id, category_id)
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_wh_categories_wh ON warehouse_categories(warehouse_id)");
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS check_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

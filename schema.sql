@@ -24,6 +24,14 @@ CREATE TABLE IF NOT EXISTS warehouses (
   tz_offset TEXT DEFAULT ''                -- часовой пояс склада (UTC±ч); пусто = общий из настроек
 );
 
+-- Категории товаров, которые хранятся на складе (многие ко многим).
+CREATE TABLE IF NOT EXISTS warehouse_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  warehouse_id INTEGER NOT NULL,
+  category_id INTEGER NOT NULL,
+  UNIQUE (warehouse_id, category_id)
+);
+
 CREATE TABLE IF NOT EXISTS slots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   date TEXT NOT NULL,
