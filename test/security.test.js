@@ -1,6 +1,6 @@
 // Сквозные проверки безопасности по реальным HTTP-запросам к server.js.
 const http = require('http');
-const BASE = { host: '127.0.0.1', port: 4998 };
+const BASE = { host: '127.0.0.1', port: parseInt(process.env.E2E_PORT || '4998', 10) };
 
 function req(method, path, { body, headers = {}, cookie } = {}) {
   return new Promise((resolve) => {

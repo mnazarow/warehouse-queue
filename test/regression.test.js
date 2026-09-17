@@ -9,7 +9,7 @@ function req(method, path, { body, cookie } = {}) {
     const h = {};
     if (data !== null) { h['Content-Type'] = 'application/json'; h['Content-Length'] = Buffer.byteLength(data); }
     if (cookie) h['Cookie'] = cookie;
-    const r = http.request({ host: '127.0.0.1', port: 4998, method, path, headers: h, timeout: 8000 }, (res) => {
+    const r = http.request({ host: '127.0.0.1', port: parseInt(process.env.E2E_PORT || '4998', 10), method, path, headers: h, timeout: 8000 }, (res) => {
       let b = ''; res.on('data', c => b += c);
       res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) {}
         resolve({ status: res.statusCode, json: j, body: b, cookie: (res.headers['set-cookie'] || []).map(c => c.split(';')[0]).join('; ') }); });
@@ -20,7 +20,9 @@ function req(method, path, { body, cookie } = {}) {
   });
 }
 const PY = (sql) => execFileSync('python3', ['-c',
-  `import sqlite3,sys;db=sqlite3.connect('/tmp/sec_test.db');db.execute(sys.argv[1]);db.commit()`, sql], { encoding: 'utf8' });
+  `import sqlite3,sys;db=sqlite3.connect(sys.argv[2]);db.execute(sys.argv[1]);db.commit()`, sql, DB], { encoding: 'utf8' });
+
+const DB = process.env.DB_PATH || '/tmp/sec_test.db';
 
 const checks = [];
 const check = (l, ok, d = '') => checks.push({ l, ok, d });
@@ -32,7 +34,7 @@ const check = (l, ok, d = '') => checks.push({ l, ok, d });
   const lg = await req('POST', '/api/manager/login', { body: { username: 'legacy_user', password: 'staryi-parol-2025' } });
   check('вход по старому sha256-хешу работает', lg.status === 200 && lg.json && lg.json.success, `HTTP ${lg.status}`);
   const stored = execFileSync('python3', ['-c',
-    `import sqlite3;print(sqlite3.connect('/tmp/sec_test.db').execute("SELECT password_hash FROM managers WHERE username='legacy_user'").fetchone()[0][:7])`],
+    `import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute("SELECT password_hash FROM managers WHERE username='legacy_user'").fetchone()[0][:7])`, DB],
     { encoding: 'utf8' }).trim();
   check('старый хеш переписан на scrypt при входе', stored === 'scrypt$', 'в базе: ' + stored);
   const lg2 = await req('POST', '/api/manager/login', { body: { username: 'legacy_user', password: 'staryi-parol-2025' } });

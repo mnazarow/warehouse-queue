@@ -9,7 +9,7 @@ function req(method, path, { body, cookie } = {}) {
     const h = {};
     if (data !== null) { h['Content-Type'] = 'application/json'; h['Content-Length'] = Buffer.byteLength(data); }
     if (cookie) h['Cookie'] = cookie;
-    const r = http.request({ host: '127.0.0.1', port: 4998, method, path, headers: h, timeout: 8000 }, (res) => {
+    const r = http.request({ host: '127.0.0.1', port: parseInt(process.env.E2E_PORT || '4998', 10), method, path, headers: h, timeout: 8000 }, (res) => {
       let b = ''; res.on('data', c => b += c);
       res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) {}
         resolve({ status: res.statusCode, json: j, body: b,
@@ -21,9 +21,11 @@ function req(method, path, { body, cookie } = {}) {
   });
 }
 const sql = (q) => execFileSync('python3', ['-c',
-  `import sqlite3,sys;db=sqlite3.connect('/tmp/sec_test.db');db.execute(sys.argv[1]);db.commit()`, q], { encoding: 'utf8' });
+  `import sqlite3,sys;db=sqlite3.connect(sys.argv[2]);db.execute(sys.argv[1]);db.commit()`, q, DB], { encoding: 'utf8' });
 const sqlGet = (q) => execFileSync('python3', ['-c',
-  `import sqlite3,sys;print(sqlite3.connect('/tmp/sec_test.db').execute(sys.argv[1]).fetchone())`, q], { encoding: 'utf8' }).trim();
+  `import sqlite3,sys;print(sqlite3.connect(sys.argv[2]).execute(sys.argv[1]).fetchone())`, q, DB], { encoding: 'utf8' }).trim();
+
+const DB = process.env.DB_PATH || '/tmp/sec_test.db';
 
 const checks = [];
 const check = (l, ok, d = '') => checks.push({ l, ok, d });

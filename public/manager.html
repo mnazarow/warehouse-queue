@@ -1556,7 +1556,7 @@
   </div>
 
   <div class="modal-overlay" id="createWarehouseModal">
-    <div class="modal" style="max-width:400px">
+    <div class="modal wh-modal-wide" style="max-width:1200px">
       <h2>Добавить склад</h2>
       <div class="form-group">
         <label>Название</label>
@@ -1566,9 +1566,9 @@
         <label>Адрес</label>
         <input type="text" id="newWarehouseAddress" placeholder="ул. Ленина, 1">
       </div>
-      <div class="form-group">
+      <div class="form-group wh-span">
         <label>Категории товаров на складе</label>
-        <div id="newWarehouseCategories" style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;max-height:190px;overflow-y:auto">
+        <div id="newWarehouseCategories" style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;max-height:220px;overflow-y:auto;column-width:220px;column-gap:18px">
           <div class="no-slots" style="padding:6px">Загрузка...</div>
         </div>
         <div style="display:flex;gap:6px;margin-top:8px">
@@ -1576,6 +1576,7 @@
                  onkeydown="if(event.key==='Enter'){event.preventDefault();addWarehouseCategory('new')}">
           <button class="btn btn-secondary btn-sm" type="button" onclick="addWarehouseCategory('new')" style="white-space:nowrap">+ Категория</button>
         </div>
+        <div id="newWarehouseCategoryHint" style="font-size:0.8rem;margin-top:6px;display:none"></div>
         <div style="font-size:0.78rem;color:#718096;margin-top:4px">Отметьте, какие товары хранятся на этом складе. Список общий со вкладкой «Номенклатура».</div>
       </div>
       <div class="form-group">
@@ -1585,11 +1586,11 @@
       </div>
       <div class="form-group">
         <label>Как доехать (показывается клиенту после записи)</label>
-        <textarea id="newWarehouseDirections" rows="3" placeholder="Съезд с МКАД на..., далее вторые ворота, пропуск у охраны" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
+        <textarea id="newWarehouseDirections" rows="5" placeholder="Съезд с МКАД на..., далее вторые ворота, пропуск у охраны" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
       </div>
       <div class="form-group">
         <label>Маршрут из Москвы (по шагам, каждый шаг с новой строки)</label>
-        <textarea id="newWarehouseRouteMoscow" rows="3" placeholder="По М-4 «Дон» до 23-го км&#10;Съезд «Видное», направо&#10;400 м вдоль забора до вторых ворот" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
+        <textarea id="newWarehouseRouteMoscow" rows="5" placeholder="По М-4 «Дон» до 23-го км&#10;Съезд «Видное», направо&#10;400 м вдоль забора до вторых ворот" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:8px;font-size:0.9rem;resize:vertical"></textarea>
         <div style="font-size:0.78rem;color:#718096;margin-top:4px">По шагам строится нарисованная схема «Москва → склад» в окне «Вы записаны!»; склад на ней отмечен логотипом.</div>
       </div>
       <div class="form-group">
@@ -1600,13 +1601,13 @@
           <button class="btn btn-secondary btn-sm" type="button" onclick="clearSchemeFile('new')" style="display:block;margin-top:6px">Убрать схему</button>
         </div>
       </div>
-      <div class="form-group">
+      <div class="form-group wh-span">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="newWarehouseDefault"> Склад по умолчанию
         </label>
       </div>
-      <div id="createWarehouseError" style="color:#e53e3e;font-size:0.9rem;margin-bottom:8px;display:none"></div>
-      <div id="createWarehouseSuccess" style="color:#38a169;font-size:0.9rem;margin-bottom:8px;display:none"></div>
+      <div id="createWarehouseError" class="wh-span" style="color:#e53e3e;font-size:0.9rem;margin-bottom:8px;display:none"></div>
+      <div id="createWarehouseSuccess" class="wh-span" style="color:#38a169;font-size:0.9rem;margin-bottom:8px;display:none"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeCreateWarehouseModal()">Отмена</button>
         <button class="btn btn-primary" onclick="createWarehouse()">Добавить</button>
@@ -1636,6 +1637,7 @@
                  onkeydown="if(event.key==='Enter'){event.preventDefault();addWarehouseCategory('edit')}">
           <button class="btn btn-secondary btn-sm" type="button" onclick="addWarehouseCategory('edit')" style="white-space:nowrap">+ Категория</button>
         </div>
+        <div id="editWarehouseCategoryHint" style="font-size:0.8rem;margin-top:6px;display:none"></div>
         <div style="font-size:0.78rem;color:#718096;margin-top:4px">Отметьте, какие товары хранятся на этом складе. Список общий со вкладкой «Номенклатура».</div>
       </div>
       <div class="form-group">
@@ -4044,12 +4046,30 @@
 
     // Быстрое добавление категории прямо из карточки склада: создаётся в общем
     // справочнике и сразу отмечается для этого склада.
+    function warehouseCategoryHint(kind, text, isError) {
+      const el = document.getElementById(kind + 'WarehouseCategoryHint');
+      if (!el) return;
+      el.textContent = text || '';
+      el.style.color = isError ? '#e53e3e' : '#38a169';
+      el.style.display = text ? 'block' : 'none';
+    }
+
     async function addWarehouseCategory(kind) {
       const input = document.getElementById(kind + 'WarehouseNewCategory');
-      const name = input.value.trim();
-      if (!name) return;
       const errEl = document.getElementById(kind === 'new' ? 'createWarehouseError' : 'editWarehouseError');
+      if (!input) {
+        if (errEl) { errEl.textContent = 'Поле ввода категории не найдено — обновите страницу (Ctrl+F5)'; errEl.style.display = 'block'; }
+        return;
+      }
+      const name = input.value.trim();
+      // Раньше при пустом поле кнопка молча ничего не делала — теперь подсказываем.
+      if (!name) {
+        warehouseCategoryHint(kind, 'Введите название категории в поле слева', true);
+        input.focus();
+        return;
+      }
       const keep = selectedWarehouseCategoryIds(kind);
+      warehouseCategoryHint(kind, 'Добавляем…', false);
       try {
         const res = await fetch('/api/manager/categories', {
           method: 'POST',
@@ -4059,21 +4079,44 @@
         });
         let data = null;
         try { data = await res.json(); } catch (e) {}
+        if (res.status === 401) {
+          warehouseCategoryHint(kind, 'Сессия истекла — войдите заново', true);
+          return;
+        }
+        if (res.status === 403) {
+          warehouseCategoryHint(kind, 'Нет прав на раздел «Номенклатура» — обратитесь к администратору', true);
+          return;
+        }
+        if (res.status === 404) {
+          warehouseCategoryHint(kind, 'На сервере старая версия приложения — обновите код и перезапустите его', true);
+          return;
+        }
         if (!res.ok || !data || !data.success) {
-          if (errEl) {
-            errEl.textContent = (data && data.error) || 'Не удалось добавить категорию';
-            errEl.style.display = 'block';
-          }
+          warehouseCategoryHint(kind, (data && data.error) || ('Не удалось добавить категорию (код ' + res.status + ')'), true);
           return;
         }
         input.value = '';
         if (errEl) errEl.style.display = 'none';
+        // id берём из ответа: он не зависит от кэша справочника.
+        let addedId = data.category && data.category.id ? Number(data.category.id) : 0;
         await loadWarehouseCategoryList();
-        const added = warehouseCategoryList.find(function (c) { return c.name === name; });
-        if (added) keep.push(Number(added.id));
+        if (!addedId) {
+          const found = warehouseCategoryList.find(function (c) { return c.name === name; });
+          if (found) addedId = Number(found.id);
+        }
+        if (addedId) {
+          if (!warehouseCategoryList.some(function (c) { return Number(c.id) === addedId; })) {
+            warehouseCategoryList.push({ id: addedId, name: name });   // на случай кэша справочника
+            warehouseCategoryList.sort(function (a, b) { return String(a.name).localeCompare(String(b.name), 'ru'); });
+          }
+          if (keep.indexOf(addedId) === -1) keep.push(addedId);
+        }
         renderWarehouseCategoryPicker(kind, keep);
+        warehouseCategoryHint(kind, data.existed
+          ? 'Категория «' + name + '» уже была в справочнике — отмечена для склада'
+          : 'Категория «' + name + '» добавлена и отмечена. Не забудьте сохранить склад.', false);
       } catch (e) {
-        if (errEl) { errEl.textContent = 'Ошибка сети: ' + e.message; errEl.style.display = 'block'; }
+        warehouseCategoryHint(kind, 'Ошибка сети: ' + e.message, true);
       }
     }
 
@@ -4084,6 +4127,7 @@
       document.getElementById('newWarehouseRouteMoscow').value = '';
       document.getElementById('newWarehouseTz').value = '';
       document.getElementById('newWarehouseNewCategory').value = '';
+      warehouseCategoryHint('new', '');
       loadWarehouseCategoryList().then(function () { renderWarehouseCategoryPicker('new', []); });
       clearSchemeFile('new');
       document.getElementById('newWarehouseDefault').checked = false;
@@ -4153,6 +4197,7 @@
         document.getElementById('editWarehouseTz').value =
           (w.tz_offset === undefined || w.tz_offset === null) ? '' : String(w.tz_offset).trim();
         document.getElementById('editWarehouseNewCategory').value = '';
+        warehouseCategoryHint('edit', '');
         await loadWarehouseCategoryList();
         renderWarehouseCategoryPicker('edit', (w.categories || []).map(function (c) { return Number(c.id); }));
         schemeData.edit = w.map_scheme || '';

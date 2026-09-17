@@ -376,6 +376,18 @@ app.use(session({
     secure: process.env.COOKIE_SECURE === '1'
   }
 }));
+
+// Любой успешный запрос, изменяющий данные, сбрасывает кэш слотов и статистики.
+// Точечные вызовы в два десятка маршрутов легко забыть при доработках, поэтому
+// сброс сделан одним местом — на завершении ответа.
+app.use(function (req, res, next) {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  res.on('finish', function () {
+    if (res.statusCode >= 400) return;
+    try { flushSlotCaches(); } catch (e) {}
+  });
+  next();
+});
 // Admin-only areas (Settings tab, manager management, backups, DB migration,
 // IP networks, app updates). Must be AFTER the session middleware so req.session
 // is available. Главный администратор (admin) — администратор по умолчанию.
@@ -634,24 +646,25 @@ function redisDel(key) {
   });
 }
 
+// Сброс кэша слотов. Раньше чистились только ключи 'slots:*', а карточка
+// заявки ('slots-id:<id>') и статистика оставались старыми.
 function redisFlushSlotsCache() {
-  return new Promise(function(resolve) {
-    if (!redisClient || !redisEnabled) return resolve();
-    countRedisCall();
-    redisClient.keys('slots:*', function(err, keys) {
-      if (err || !keys || !keys.length) return resolve();
-      redisClient.del.apply(redisClient, keys.concat([function() { resolve(); }]));
-    });
-  });
+  return flushSlotCaches();
 }
 
+// Сбрасывает кэш по префиксу. ВАЖНО: часть ключей хранится без двоеточия
+// ('categories', 'warehouses', 'storekeepers', ...), поэтому шаблона
+// prefix + ':*' недостаточно — такой ключ под него не подходил и справочники
+// продолжали отдаваться из кэша ещё 5 минут после изменения (добавленная
+// категория «не появлялась»). Удаляем и точный ключ, и все ключи с префиксом.
 function redisFlushByPrefix(prefix) {
   return new Promise(function(resolve) {
     if (!redisClient || !redisEnabled) return resolve();
     countRedisCall();
     redisClient.keys(prefix + ':*', function(err, keys) {
-      if (err || !keys || !keys.length) return resolve();
-      redisClient.del.apply(redisClient, keys.concat([function() { resolve(); }]));
+      const list = (err || !keys) ? [] : keys.slice();
+      if (list.indexOf(prefix) === -1) list.push(prefix); // сам ключ без ':'
+      redisClient.del.apply(redisClient, list.concat([function() { resolve(); }]));
     });
   });
 }
@@ -665,6 +678,19 @@ function redisFlushAll() {
       redisClient.del.apply(redisClient, keys.concat([function() { resolve(); }]));
     });
   });
+}
+
+// Кэш слотов и статистики зависит от таблицы slots. Раньше его никто не
+// сбрасывал: после записи клиента окно ещё до 30 секунд показывалось свободным
+// на странице записи, а в кабинете статус заявки обновлялся с задержкой.
+function flushSlotCaches() {
+  return Promise.all([
+    redisFlushByPrefix('slots'),
+    redisFlushByPrefix('slots-id'),
+    redisFlushByPrefix('stats'),
+    redisFlushByPrefix('stats-storekeepers'),
+    redisFlushByPrefix('stats-orders')
+  ]);
 }
 
 function cacheKey() {
@@ -3175,12 +3201,20 @@ app.post('/api/manager/categories', requireManager, (req, res) => {
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Название обязательно' });
   }
+  const clean = name.trim();
   try {
-    db.prepare('INSERT INTO categories (name) VALUES (?)').run(name.trim());
+    const exists = db.prepare('SELECT * FROM categories WHERE name = ?').get(clean);
+    if (exists) {
+      // Не ошибка: карточке склада нужен id, чтобы сразу отметить категорию.
+      return res.json({ success: true, existed: true, category: { id: exists.id, name: exists.name } });
+    }
+    db.prepare('INSERT INTO categories (name) VALUES (?)').run(clean);
     redisFlushByPrefix('categories');
-    res.json({ success: true });
+    // lastInsertRowid не возвращается на PostgreSQL — ищем id отдельным SELECT.
+    const created = db.prepare('SELECT * FROM categories WHERE name = ?').get(clean);
+    res.json({ success: true, category: created ? { id: created.id, name: created.name } : null });
   } catch (e) {
-    res.status(400).json({ error: 'Категория уже существует' });
+    res.status(400).json({ error: 'Не удалось добавить категорию' });
   }
 });
 

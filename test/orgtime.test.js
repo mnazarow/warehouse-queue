@@ -9,7 +9,7 @@ function req(method, path, { body, cookie } = {}) {
     const h = {};
     if (data !== null) { h['Content-Type'] = 'application/json'; h['Content-Length'] = Buffer.byteLength(data); }
     if (cookie) h['Cookie'] = cookie;
-    const r = http.request({ host: '127.0.0.1', port: 4998, method, path, headers: h, timeout: 15000 }, (res) => {
+    const r = http.request({ host: '127.0.0.1', port: parseInt(process.env.E2E_PORT || '4998', 10), method, path, headers: h, timeout: 15000 }, (res) => {
       let b = ''; res.on('data', c => b += c);
       res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) {}
         resolve({ status: res.statusCode, json: j, body: b,
@@ -138,6 +138,9 @@ function start1C(port, mapping) {
   sqlRun("INSERT OR IGNORE INTO warehouses (id, name, address, tz_offset) VALUES (77,'Склад UTC+7','Красноярск','7');" +
          "UPDATE warehouses SET tz_offset='7' WHERE id=77;" +
          "UPDATE slots SET warehouse_id=77 WHERE id=" + free[1].id + ";");
+  // Правка мимо API кэш не сбрасывает — делаем это явным запросом через API,
+  // иначе с включённым Redis кабинет ещё 10 секунд отдаёт прежний ответ.
+  await req('PUT', '/api/manager/warehouses/77', { cookie: A, body: { name: 'Склад UTC+7', address: 'Красноярск', tzOffset: '7' } });
   const cab3 = await req('GET', `/api/manager/slots?date=${date}`, { cookie: A });
   const row3 = (cab3.json.slots || []).find(s => s.id === free[1].id);
   const diff = row3 && row3.booked_at
