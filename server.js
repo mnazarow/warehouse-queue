@@ -1438,13 +1438,18 @@ app.get('/api/warehouses', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM warehouses ORDER BY is_default DESC, name').all();
     const globalTz = appTzOffsetHours();
+    // Категории товаров склада: на странице записи их можно раскрыть в карточке.
+    const catsByWh = warehouseCategoriesMap();
     const list = rows.map(function (w) {
       let tz = globalTz;
       if (w.tz_offset !== undefined && w.tz_offset !== null && String(w.tz_offset).trim() !== '') {
         const h = parseInt(w.tz_offset, 10);
         if (Number.isFinite(h) && h >= -12 && h <= 14) tz = h;
       }
-      return { id: w.id, name: w.name, address: w.address || '', is_default: w.is_default, tz_offset: tz };
+      return {
+        id: w.id, name: w.name, address: w.address || '', is_default: w.is_default, tz_offset: tz,
+        categories: (catsByWh[w.id] || []).map(function (c) { return c.name; })
+      };
     });
     res.json({ warehouses: list, tz_offset: globalTz });
   } catch (err) {

@@ -115,6 +115,20 @@ const check = (l, ok, d = '') => checks.push({ l, ok, d });
   check('связи удалённого склада убраны',
         Number(sqlOne(`SELECT COUNT(*) FROM warehouse_categories WHERE warehouse_id=${whId}`)) === 0, '');
 
+  // --- публичная страница записи видит категории склада ---
+  await req('PUT', `/api/manager/warehouses/${whId}`, { cookie: A, body: { name: 'Склад с категориями', categoryIds: [] } });
+  const pubWh = await req('POST', '/api/manager/warehouses', { cookie: A, body: {
+    name: 'Публичный склад', address: 'г. Подольск', categoryIds: [byName['Насосы'], byName['Фитинги']] } });
+  const pub = await req('GET', '/api/warehouses');
+  const pw = (pub.json.warehouses || []).find(w => w.name === 'Публичный склад');
+  check('публичный список складов отдаёт категории',
+        pw && Array.isArray(pw.categories) && pw.categories.length === 2, JSON.stringify(pw && pw.categories));
+  check('в публичном списке категории — названиями',
+        pw && typeof pw.categories[0] === 'string', JSON.stringify(pw && pw.categories));
+  check('склад без категорий отдаёт пустой список',
+        (pub.json.warehouses || []).every(w => Array.isArray(w.categories)), '');
+  if (pw) await req('DELETE', `/api/manager/warehouses/${pw.id}`, { cookie: A });
+
   // --- права доступа: раздел «Склады» только на чтение ---
   const crypto = require('crypto');
   const hash = crypto.createHash('sha256').update('Manager-Parol-26').digest('hex');

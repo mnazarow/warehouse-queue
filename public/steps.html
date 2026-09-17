@@ -391,6 +391,40 @@
             tz.textContent = WhTime.workLabel(w.tz_offset);
             body.appendChild(tz);
           }
+          // Категории товаров склада — раскрывающийся список внизу плашки.
+          // Плашка сама по себе кнопка выбора склада, поэтому у переключателя
+          // останавливаем всплытие: раскрытие списка не должно менять выбор.
+          if (Array.isArray(w.categories) && w.categories.length) {
+            const cats = document.createElement('span');
+            cats.className = 'vk-cats';
+            const toggle = document.createElement('span');
+            toggle.className = 'vk-cats-toggle';
+            toggle.setAttribute('role', 'button');
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.tabIndex = 0;
+            toggle.textContent = 'Категории товаров (' + w.categories.length + ')';
+            const catList = document.createElement('span');
+            catList.className = 'vk-cats-list';
+            w.categories.forEach(function (nm) {
+              const chip = document.createElement('span');
+              chip.className = 'vk-cat';
+              chip.textContent = nm;
+              catList.appendChild(chip);
+            });
+            const switchCats = function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              const open = cats.classList.toggle('open');
+              toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            };
+            toggle.addEventListener('click', switchCats);
+            toggle.addEventListener('keydown', function (e) {
+              if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') switchCats(e);
+            });
+            cats.appendChild(toggle);
+            cats.appendChild(catList);
+            body.appendChild(cats);
+          }
           card.appendChild(dot);
           card.appendChild(body);
           card.addEventListener('click', () => {
